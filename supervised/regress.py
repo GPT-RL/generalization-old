@@ -72,7 +72,7 @@ class GPTEmbed(nn.Module):
         architecture: ARCHITECTURE,
         train_wpe: bool,
         train_ln: bool,
-        tokenized: torch.Tensor,
+        inputs: torch.Tensor,
     ):
         super().__init__()
         gpt = build_gpt(embedding_size, architecture == RANDOMIZED)
@@ -88,12 +88,12 @@ class GPTEmbed(nn.Module):
         if (train_ln or train_wpe) and (architecture in [RANDOMIZED, PRETRAINED]):
             self.net = gpt
         else:
-            num_embeddings = tokenized.max() + 1
+            num_embeddings = int(inputs.max() + 1)
             dummy_tokens = torch.arange(num_embeddings).unsqueeze(-1)
             embeddings = gpt(dummy_tokens)
             self.net = nn.Sequential(
                 Lambda(lambda x: x.long()),
-                nn.Embedding(num_embeddings, embeddings.size(1))
+                nn.Embedding(num_embeddings, int(embeddings.size(1)))
                 if architecture == BASELINE
                 else nn.Embedding.from_pretrained(embeddings),
                 Lambda(lambda x: x[:, -1]),
@@ -110,7 +110,6 @@ class Net(nn.Module):
         hidden_size: int,
         max_int: int,
         n_layers: int,
-        multiplicative_interaction: bool,
         **kwargs,
     ):
         super(Net, self).__init__()
@@ -120,10 +119,9 @@ class Net(nn.Module):
         ).n_embd
         self.gpt = GPTEmbed(embedding_size=embedding_size, **kwargs)
         self.embed = nn.Linear(max_int, self.embedding_size)
-        self.multiplicative_interaction = multiplicative_interaction
         self.net = nn.Sequential(
             nn.Linear(
-                (1 if multiplicative_interaction else 2) * self.embedding_size,
+                self.embedding_size,
                 hidden_size,
             ),
             nn.ReLU(),
@@ -138,22 +136,13 @@ class Net(nn.Module):
         x1, x2 = torch.split(x, [self.max_int, 1], dim=-1)
         embedded1 = self.embed(x1)
         embedded2 = self.gpt(x2)
-        cat = (
-            embedded1 * embedded2
-            if self.multiplicative_interaction
-            else torch.cat([embedded1, embedded2], dim=-1).squeeze(1)
-        )
-        return self.net(cat).squeeze(-1)
+        return self.net(embedded1 * embedded2).squeeze(-1)
 
 
 def get_gpt_size(gpt_size: GPTSize):
     gpt_size = "" if gpt_size == "small" else f"-{gpt_size}"
     gpt_size = f"gpt2{gpt_size}"
     return gpt_size
-
-
-def shuffle(df: pd.DataFrame, **kwargs):
-    return df.sample(frac=1, **kwargs).reset_index(drop=True)
 
 
 ANTONYMS = "antonyms"
@@ -200,7 +189,7 @@ class Args(Tap):
     batch_size: int = 32
     config: Optional[str] = None  # If given, yaml config from which to load params
     data_path: str = "data.zip"
-    discount: Optional[float] = (0.9,)
+    discount: Optional[float] = 0.9
     dry_run: bool = False
     embedding_size: GPTSize = "small"
     epochs: int = 14
@@ -213,7 +202,6 @@ class Args(Tap):
     log_level: str = "INFO"
     lr: float = 1.0
     max_integer: int = 20
-    multiplicative_interaction: bool = True
     n_layers: int = 1
     no_cuda: bool = False
     architecture: ARCHITECTURE = PRETRAINED
@@ -239,33 +227,6 @@ def get_save_path(run_id: Optional[int]):
         Path("/tmp/logs/checkpoint.pkl")
         if run_id is None
         else Path("/tmp/logs", str(run_id), "checkpoint.pkl")
-    )
-
-
-def max_agreement(
-    goals: torch.tensor,
-    targets: torch.tensor,
-    outputs: torch.tensor,
-):
-    goals = goals.argmax(-1)
-    goals = goals.cpu().numpy()
-    targets = targets.cpu().numpy()
-    outputs = outputs.detach().cpu().numpy()
-
-    df = pd.DataFrame(data=dict(goals=goals, targets=targets, outputs=outputs))
-
-    def pair_inequalities(s: pd.Series):
-        a = s.to_numpy()
-        return np.expand_dims(a, axis=0) >= np.expand_dims(a, axis=1)
-
-    def matching_inequalities(s1: pd.Series, s2: pd.Series):
-        return np.mean(pair_inequalities(s1) == pair_inequalities(s2))
-
-    return np.mean(
-        [
-            matching_inequalities(gdf["targets"], gdf["outputs"])
-            for _, gdf in df.groupby("goals")
-        ]
     )
 
 
@@ -320,11 +281,11 @@ def train(args: Args, logger: HasuraLogger):
         axis=1,
     )
     data = np.concatenate([obs, tokenized, data], axis=1)
-    _inputs = data[:, : args.max_integer + 1]
-    _inputs = torch.tensor(_inputs, dtype=torch.float32).to(device)
-    _targets = torch.tensor(targets).to(device)
-    _is_test = torch.tensor(is_test).to(device)
-    _goal = torch.sort(torch.tensor(goal).to(device)).values
+    raw_inputs = data[:, : args.max_integer + 1]
+    raw_inputs = torch.tensor(raw_inputs, dtype=torch.float32).to(device)
+    raw_targets = torch.tensor(targets).to(device)
+    raw_is_test = torch.tensor(is_test).to(device)
+    raw_goal = torch.sort(torch.tensor(goal).to(device)).values
 
     def repeat_data(in_dataset, batch_size):
         tiles = int(np.ceil(batch_size / sum(in_dataset)))
@@ -358,9 +319,8 @@ def train(args: Args, logger: HasuraLogger):
         train_wpe=args.train_wpe,
         train_ln=args.train_ln,
         max_int=args.max_integer,
-        tokenized=tokenized,
+        inputs=tokenized,
         n_layers=args.n_layers,
-        multiplicative_interaction=args.multiplicative_interaction,
     ).to(device)
 
     save_path = get_save_path(logger.run_id)
@@ -378,8 +338,8 @@ def train(args: Args, logger: HasuraLogger):
 
     def get_metric(f):
         with torch.no_grad():
-            _outputs = model(_inputs)
-            return torch.mean(f(_outputs, _targets).float()).item()
+            _outputs = model(raw_inputs)
+            return torch.mean(f(_outputs, raw_targets).float()).item()
 
     def get_accuracy(is_dataset: torch.Tensor):
         def f(_outputs: torch.Tensor, _targets: torch.Tensor):
@@ -395,7 +355,7 @@ def train(args: Args, logger: HasuraLogger):
 
         def f(_outputs: torch.Tensor, _targets: torch.Tensor):
             orderings = []
-            unique_goals, goals_count = _goal[is_dataset].unique(return_counts=True)
+            unique_goals, goals_count = raw_goal[is_dataset].unique(return_counts=True)
             out = torch.split(_outputs[is_dataset], list(goals_count))
             tgt = torch.split(_targets[is_dataset], list(goals_count))
             for g, o, t in zip(unique_goals, out, tgt):
@@ -424,8 +384,8 @@ def train(args: Args, logger: HasuraLogger):
             log = {
                 EPOCH: epoch,
                 TEST_LOSS: test_loss,
-                TEST_ACCURACY: get_accuracy(_is_test),
-                TEST_EXPECTED_RETURN: get_expected_return(_is_test),
+                TEST_ACCURACY: get_accuracy(raw_is_test),
+                TEST_EXPECTED_RETURN: get_expected_return(raw_is_test),
                 RUN_ID: logger.run_id,
                 HOURS: (time.time() - start) / 3600,
             }
@@ -449,8 +409,8 @@ def train(args: Args, logger: HasuraLogger):
                     LOSS: loss.item(),
                     RUN_ID: logger.run_id,
                     HOURS: (time.time() - start) / 3600,
-                    ACCURACY: get_accuracy(~_is_test),
-                    EXPECTED_RETURN: get_expected_return(~_is_test),
+                    ACCURACY: get_accuracy(~raw_is_test),
+                    EXPECTED_RETURN: get_expected_return(~raw_is_test),
                     SAVE_COUNT: save_count,
                 }
                 pprint(log)
