@@ -87,12 +87,12 @@ class GPTEmbed(nn.Module):
         if (train_ln or train_wpe) and (architecture in [RANDOMIZED, PRETRAINED]):
             self.net = gpt
         else:
-            num_embeddings = inputs.max() + 1
+            num_embeddings = int(inputs.max() + 1)
             dummy_tokens = torch.arange(num_embeddings).unsqueeze(-1)
             embeddings = gpt(dummy_tokens)
             self.net = nn.Sequential(
                 Lambda(lambda x: x.long()),
-                nn.Embedding(num_embeddings, embeddings.size(1))
+                nn.Embedding(num_embeddings, int(embeddings.size(1)))
                 if architecture == BASELINE
                 else nn.Embedding.from_pretrained(embeddings),
                 Lambda(lambda x: x[:, -1]),
