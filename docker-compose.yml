@@ -28,7 +28,7 @@ services:
       - --method=${SWEEP_METHOD}
       - --remaining-runs=${MAX_RUNS}
       - redis
-  agent:
+  run:
     build: .
     depends_on:
       - rank-counter

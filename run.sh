@@ -1,6 +1,6 @@
 #! /usr/bin/env bash
 mkdir -p logs ~/.cache/GPT ~/.cache/huggingface
-name=ppo_agent
+name=generalization_agent
 docker build -t $name .
 docker run --rm -it\
   --env-file .env\

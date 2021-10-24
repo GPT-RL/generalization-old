@@ -73,7 +73,7 @@ RUN pip install poetry \
 FROM base AS runtime
 
 WORKDIR "/project"
-ENV VIRTUAL_ENV=/root/.cache/pypoetry/virtualenvs/ppo-K3BlsyQa-py3.8/
+ENV VIRTUAL_ENV=/root/.cache/pypoetry/virtualenvs/generalization-K3BlsyQa-py3.8/
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 COPY --from=python-deps $VIRTUAL_ENV $VIRTUAL_ENV
 COPY . .
