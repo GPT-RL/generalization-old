@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "ppo"
+name = "generalization"
 version = "0.1.0"
 description = ""
 authors = ["Ethan Brooks", "Logan Walls <2934282+LoganWalls@users.noreply.github.com>"]
