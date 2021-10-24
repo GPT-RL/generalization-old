@@ -8,7 +8,6 @@ from pathlib import Path
 from pprint import pprint
 from typing import Literal, Optional, cast, get_args
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -109,6 +108,7 @@ class Net(nn.Module):
         hidden_size: int,
         max_int: int,
         n_layers: int,
+        inputs,
         **kwargs,
     ):
         super(Net, self).__init__()
@@ -116,11 +116,22 @@ class Net(nn.Module):
         self.embedding_size = GPT2Config.from_pretrained(
             get_gpt_size(embedding_size)
         ).n_embd
-        self.gpt = GPTEmbed(embedding_size=embedding_size, **kwargs)
-        self.embed = nn.Linear(max_int, self.embedding_size)
+        gpt = GPTEmbed(embedding_size=embedding_size, inputs=inputs, **kwargs)
+        embedding = nn.Embedding(int(1 + inputs.max()), self.embedding_size)
+        linearity = nn.Linear(max_int, self.embedding_size, bias=False)
+        nn.init.normal_(linearity.weight)
+        # linearity.weight = nn.Parameter(embedding.weight[inputs.flatten()].T)
+
+        self.embedding1 = nn.Sequential(
+            linearity,
+            nn.Linear(self.embedding_size, hidden_size),
+        )
+        self.embedding2 = nn.Sequential(
+            gpt, nn.Linear(self.embedding_size, hidden_size)
+        )
         self.net = nn.Sequential(
             nn.Linear(
-                self.embedding_size,
+                hidden_size,
                 hidden_size,
             ),
             nn.ReLU(),
@@ -133,9 +144,9 @@ class Net(nn.Module):
 
     def forward(self, x):
         x1, x2 = torch.split(x, [self.max_int, 1], dim=-1)
-        embedded1 = self.embed(x1)
-        embedded2 = self.gpt(x2)
-        return self.net(embedded1 * embedded2).squeeze(-1)
+        x = self.embedding1(x1) * self.embedding2(x2)
+
+        return self.net(x).squeeze(-1)
 
 
 def get_gpt_size(gpt_size: GPTSize):
@@ -230,12 +241,6 @@ def get_save_path(run_id: Optional[int]):
 
 
 def train(args: Args, logger: HasuraLogger):
-    def compute_targets(_inputs, _goals):
-        abs_distance = abs(_goals - _inputs.argmax(-1))
-        if args.discount is None:
-            return abs_distance
-        return args.discount ** abs_distance
-
     # Training settings
     use_cuda = not args.no_cuda and torch.cuda.is_available()
 
@@ -250,47 +255,48 @@ def train(args: Args, logger: HasuraLogger):
         train_kwargs.update(cuda_kwargs)
         test_kwargs.update(cuda_kwargs)
 
-    obs = np.tile(np.eye(args.max_integer), (args.max_integer, 1))
-    goal = np.repeat(np.arange(args.max_integer), args.max_integer)
+    obs = torch.tile(torch.eye(args.max_integer), (args.max_integer, 1))
+    raw_goal = torch.arange(args.max_integer)
+    goal = torch.repeat_interleave(raw_goal, args.max_integer)
+    targets = abs(goal - obs.argmax(-1))
+    if args.discount is not None:
+        targets = args.discount ** targets
+    is_test = [str(args.test_integer) in str(g) for g in goal]
+    is_test = torch.tensor(is_test)
 
     tokenizer = GPT2Tokenizer.from_pretrained(get_gpt_size(args.embedding_size))
 
-    def tokenize():
-        for n in tqdm(goal, desc="Tokenizing data"):
-            encode = tokenizer.encode(str(n), return_tensors="pt")
+    def tokenize(g):
+        for n in tqdm(g, desc="Tokenizing data"):
+            encode = tokenizer.encode(str(n.item()), return_tensors="pt")
             yield encode.squeeze(0)
 
-    tokenized = list(tokenize())
-    tokenized = pad_sequence(tokenized, padding_value=tokenizer.eos_token_id).T
-    targets = compute_targets(_inputs=obs, _goals=goal)
-    is_test = [str(args.test_integer) in str(g) for g in goal]
-    is_test = np.array(is_test)
-    data = np.stack(
-        [targets, is_test],
-        axis=1,
-    )
-    data = np.concatenate([obs, tokenized, data], axis=1)
+    raw_tokenized = list(tokenize(raw_goal))
+    raw_tokenized = pad_sequence(raw_tokenized, padding_value=tokenizer.eos_token_id).T
+    tokenized = torch.repeat_interleave(raw_tokenized, args.max_integer, dim=0)
+
+    data = torch.stack([targets, is_test], dim=1)
+    data = torch.cat([obs, tokenized, data], dim=1)
     raw_inputs = data[:, : args.max_integer + 1]
-    raw_inputs = torch.tensor(raw_inputs, dtype=torch.float32).to(device)
-    raw_targets = torch.tensor(targets).to(device)
-    raw_is_test = torch.tensor(is_test).to(device)
-    raw_goal = torch.sort(torch.tensor(goal).to(device)).values
+    raw_inputs = raw_inputs.to(device)
+    raw_targets = targets.to(device)
+    raw_is_test = is_test.to(device)
+    raw_goal = torch.sort(goal.to(device)).values
 
     def repeat_data(in_dataset, batch_size):
-        tiles = int(np.ceil(batch_size / sum(in_dataset)))
-        return np.tile(data[in_dataset], (tiles, 1))
+        tiles = int(torch.ceil(batch_size / sum(in_dataset)))
+        return torch.tile(data[in_dataset], (tiles, 1))
 
-    data = np.concatenate(
+    data = torch.cat(
         [
             repeat_data(~is_test, args.batch_size),
             repeat_data(is_test, args.test_batch_size),
         ],
-        axis=0,
+        dim=0,
     )
 
-    rng = np.random.default_rng(seed=args.seed)
-    rng.shuffle(data, axis=0)
-    data = torch.tensor(data, dtype=torch.float32)
+    torch.manual_seed(args.seed)
+    data = data[torch.randperm(len(data))]
 
     inputs, targets, is_test = torch.split(data, [args.max_integer + 1, 1, 1], dim=-1)
     is_test = is_test.bool().squeeze(-1)
@@ -308,7 +314,7 @@ def train(args: Args, logger: HasuraLogger):
         train_wpe=args.train_wpe,
         train_ln=args.train_ln,
         max_int=args.max_integer,
-        inputs=tokenized,
+        inputs=raw_tokenized,
         n_layers=args.n_layers,
     ).to(device)
 
@@ -327,13 +333,13 @@ def train(args: Args, logger: HasuraLogger):
 
     def get_metric(f):
         with torch.no_grad():
-            _outputs = model(raw_inputs)
-            return torch.mean(f(_outputs, raw_targets).float()).item()
+            raw_outputs = model(raw_inputs)
+            return torch.mean(f(raw_outputs).float()).item()
 
     def get_accuracy(is_dataset: torch.Tensor):
-        def f(_outputs: torch.Tensor, _targets: torch.Tensor):
-            distances = torch.abs(_outputs - _targets.unsqueeze(-1))
-            correct_target = _targets[distances.argmin(0)] == _targets
+        def f(raw_outputs: torch.Tensor):
+            distances = torch.abs(raw_outputs - raw_targets.unsqueeze(-1))
+            correct_target = raw_targets[distances.argmin(0)] == raw_targets
             return correct_target[is_dataset]
 
         return get_metric(f)
@@ -342,11 +348,11 @@ def train(args: Args, logger: HasuraLogger):
         def sequential_order(t: torch.Tensor):
             return F.pad(cast(torch.Tensor, t[:-1] < t[1:]), (0, 1), value=True)
 
-        def f(_outputs: torch.Tensor, _targets: torch.Tensor):
+        def f(raw_outputs: torch.Tensor):
             orderings = []
             unique_goals, goals_count = raw_goal[is_dataset].unique(return_counts=True)
-            out = torch.split(_outputs[is_dataset], list(goals_count))
-            tgt = torch.split(_targets[is_dataset], list(goals_count))
+            out = torch.split(raw_outputs[is_dataset], list(goals_count))
+            tgt = torch.split(raw_targets[is_dataset], list(goals_count))
             for g, o, t in zip(unique_goals, out, tgt):
                 correct_ordering = sequential_order(o) == sequential_order(t)
                 correct_ordering = cast(torch.Tensor, correct_ordering)
