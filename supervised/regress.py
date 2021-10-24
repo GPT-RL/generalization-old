@@ -8,6 +8,7 @@ from pathlib import Path
 from pprint import pprint
 from typing import Literal, Optional, cast, get_args
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -217,6 +218,7 @@ class Args(Tap):
     architecture: ARCHITECTURE = PRETRAINED
     save_model: bool = False
     seed: int = 1
+    temp: float = 35
     test_batch_size: int = 1000
     test_integer: int = 2
     train_ln: bool = False
@@ -344,22 +346,34 @@ def train(args: Args, logger: HasuraLogger):
 
         return get_metric(f)
 
-    def get_expected_return(is_dataset: torch.Tensor):
-        def sequential_order(t: torch.Tensor):
-            return F.pad(cast(torch.Tensor, t[:-1] < t[1:]), (0, 1), value=True)
+    def get_expected_regret(is_dataset: torch.Tensor):
+        def get_expected_return(values: torch.Tensor):
+            v = F.pad(values, (1, 1), value=-float("inf"))
+
+            triples = torch.stack([v[:-2], v[1:-1], v[2:]]).T
+            pi = torch.softmax(cast(torch.Tensor, triples * args.temp), dim=-1)
+            T = (
+                torch.diag(pi[1:, 0], -1)
+                + torch.diag(pi[:, 1])
+                + torch.diag(pi[:-1, 2], 1)
+            )
+            return torch.matrix_power(T, 2 * args.max_integer).mean(0)
 
         def f(raw_outputs: torch.Tensor):
-            orderings = []
             unique_goals, goals_count = raw_goal[is_dataset].unique(return_counts=True)
             out = torch.split(raw_outputs[is_dataset], list(goals_count))
             tgt = torch.split(raw_targets[is_dataset], list(goals_count))
-            for g, o, t in zip(unique_goals, out, tgt):
-                correct_ordering = sequential_order(o) == sequential_order(t)
-                correct_ordering = cast(torch.Tensor, correct_ordering)
-                orderings.extend([correct_ordering[g:], correct_ordering[:g].flip(-1)])
-            orderings = pad_sequence(orderings)
-            orderings = torch.cumprod(orderings, dim=0)
-            return orderings.sum() / is_dataset.sum()
+
+            expected, optimal = torch.tensor(
+                [
+                    (
+                        get_expected_return(o)[g].item(),
+                        get_expected_return(t)[g].item(),
+                    )
+                    for g, o, t in zip(unique_goals, out, tgt)
+                ]
+            ).T
+            return optimal - expected
 
         return get_metric(f)
 
@@ -380,7 +394,7 @@ def train(args: Args, logger: HasuraLogger):
                 EPOCH: epoch,
                 TEST_LOSS: test_loss,
                 TEST_ACCURACY: get_accuracy(raw_is_test),
-                TEST_EXPECTED_RETURN: get_expected_return(raw_is_test),
+                TEST_EXPECTED_REGRET: get_expected_regret(raw_is_test),
                 RUN_ID: logger.run_id,
                 HOURS: (time.time() - start) / 3600,
             }
@@ -405,7 +419,7 @@ def train(args: Args, logger: HasuraLogger):
                     RUN_ID: logger.run_id,
                     HOURS: (time.time() - start) / 3600,
                     ACCURACY: get_accuracy(~raw_is_test),
-                    EXPECTED_RETURN: get_expected_return(~raw_is_test),
+                    EXPECTED_REGRET: get_expected_regret(~raw_is_test),
                     SAVE_COUNT: save_count,
                 }
                 pprint(log)
@@ -455,8 +469,8 @@ LOSS = "loss"
 TEST_LOSS = "test loss"
 ACCURACY = "accuracy"
 TEST_ACCURACY = "test accuracy"
-EXPECTED_RETURN = "expected return"
-TEST_EXPECTED_RETURN = "test expected return"
+EXPECTED_REGRET = "expected regret"
+TEST_EXPECTED_REGRET = "test expected regret"
 RUN_ID = "run ID"
 
 
@@ -495,8 +509,8 @@ def main(args: ArgsType):
                     LOSS,
                     ACCURACY,
                     TEST_ACCURACY,
-                    EXPECTED_RETURN,
-                    TEST_EXPECTED_RETURN,
+                    EXPECTED_REGRET,
+                    TEST_EXPECTED_REGRET,
                     TEST_LOSS,
                     SAVE_COUNT,
                     FPS,
