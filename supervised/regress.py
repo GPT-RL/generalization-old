@@ -118,10 +118,8 @@ class Net(nn.Module):
             get_gpt_size(embedding_size)
         ).n_embd
         gpt = GPTEmbed(embedding_size=embedding_size, inputs=inputs, **kwargs)
-        embedding = nn.Embedding(int(1 + inputs.max()), self.embedding_size)
         linearity = nn.Linear(max_int, self.embedding_size, bias=False)
         nn.init.normal_(linearity.weight)
-        # linearity.weight = nn.Parameter(embedding.weight[inputs.flatten()].T)
 
         self.embedding1 = nn.Sequential(
             linearity,
@@ -333,20 +331,16 @@ def train(args: Args, logger: HasuraLogger):
 
     save_count = 0
 
-    def get_metric(f):
+    def get_metric(x: torch.Tensor):
         with torch.no_grad():
-            raw_outputs = model(raw_inputs)
-            return torch.mean(f(raw_outputs).float()).item()
+            return torch.mean(x.float()).item()
 
-    def get_accuracy(is_dataset: torch.Tensor):
-        def f(raw_outputs: torch.Tensor):
-            distances = torch.abs(raw_outputs - raw_targets.unsqueeze(-1))
-            correct_target = raw_targets[distances.argmin(0)] == raw_targets
-            return correct_target[is_dataset]
+    def get_accuracy(is_dataset: torch.Tensor, raw_outputs: torch.Tensor):
+        distances = torch.abs(raw_outputs - raw_targets.unsqueeze(-1))
+        correct_target = raw_targets[distances.argmin(0)] == raw_targets
+        return get_metric(correct_target[is_dataset])
 
-        return get_metric(f)
-
-    def get_expected_regret(is_dataset: torch.Tensor):
+    def get_expected_stuff(is_dataset: torch.Tensor, raw_outputs: torch.Tensor):
         def get_expected_return(values: torch.Tensor):
             v = F.pad(values, (1, 1), value=-float("inf"))
 
@@ -359,23 +353,26 @@ def train(args: Args, logger: HasuraLogger):
             )
             return torch.matrix_power(T, 2 * args.max_integer).mean(0)
 
-        def f(raw_outputs: torch.Tensor):
-            unique_goals, goals_count = raw_goal[is_dataset].unique(return_counts=True)
-            out = torch.split(raw_outputs[is_dataset], list(goals_count))
-            tgt = torch.split(raw_targets[is_dataset], list(goals_count))
+        unique_goals, goals_count = raw_goal[is_dataset].unique(return_counts=True)
+        out = torch.split(raw_outputs[is_dataset], list(goals_count))
+        tgt = torch.split(raw_targets[is_dataset], list(goals_count))
 
-            expected, optimal = torch.tensor(
-                [
-                    (
-                        get_expected_return(o)[g].item(),
-                        get_expected_return(t)[g].item(),
-                    )
-                    for g, o, t in zip(unique_goals, out, tgt)
-                ]
-            ).T
-            return optimal - expected
+        expected, optimal, correct_max = torch.tensor(
+            [
+                (
+                    get_expected_return(o)[g].item(),
+                    get_expected_return(t)[g].item(),
+                    o.argmax() == t.argmax(),
+                )
+                for g, o, t in zip(unique_goals, out, tgt)
+            ]
+        ).T
 
-        return get_metric(f)
+        return (
+            get_metric(expected),
+            get_metric(optimal - expected),
+            get_metric(correct_max),
+        )
 
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
     for epoch in range(1, args.epochs + 1):
@@ -390,11 +387,17 @@ def train(args: Args, logger: HasuraLogger):
                     output = model(data)
                     test_loss += F.mse_loss(output.flatten(), target.flatten()).item()
 
+            test_output = model(raw_inputs)
+            test_return_, test_regret, test_correct_max = get_expected_stuff(
+                raw_is_test, test_output
+            )
             log = {
                 EPOCH: epoch,
                 TEST_LOSS: test_loss,
-                TEST_ACCURACY: get_accuracy(raw_is_test),
-                TEST_EXPECTED_REGRET: get_expected_regret(raw_is_test),
+                TEST_ACCURACY: get_accuracy(raw_is_test, test_output),
+                TEST_CORRECT_MAX: test_correct_max,
+                TEST_EXPECTED_REGRET: test_regret,
+                TEST_EXPECTED_RETURN: test_return_,
                 RUN_ID: logger.run_id,
                 HOURS: (time.time() - start) / 3600,
             }
@@ -413,13 +416,19 @@ def train(args: Args, logger: HasuraLogger):
             loss.backward()
             optimizer.step()
             if batch_idx == 0 and log_epoch:
+                raw_output = model(raw_inputs)
+                return_, regret, correct_max = get_expected_stuff(
+                    ~raw_is_test, raw_output
+                )
                 log = {
                     EPOCH: epoch,
                     LOSS: loss.item(),
                     RUN_ID: logger.run_id,
                     HOURS: (time.time() - start) / 3600,
-                    ACCURACY: get_accuracy(~raw_is_test),
-                    EXPECTED_REGRET: get_expected_regret(~raw_is_test),
+                    ACCURACY: get_accuracy(~raw_is_test, raw_output),
+                    CORRECT_MAX: correct_max,
+                    EXPECTED_REGRET: regret,
+                    EXPECTED_RETURN: return_,
                     SAVE_COUNT: save_count,
                 }
                 pprint(log)
@@ -471,6 +480,10 @@ ACCURACY = "accuracy"
 TEST_ACCURACY = "test accuracy"
 EXPECTED_REGRET = "expected regret"
 TEST_EXPECTED_REGRET = "test expected regret"
+EXPECTED_RETURN = "expected return"
+TEST_EXPECTED_RETURN = "test expected return"
+CORRECT_MAX = "correct max"
+TEST_CORRECT_MAX = "test correct max"
 RUN_ID = "run ID"
 
 
@@ -504,18 +517,27 @@ def main(args: ArgsType):
 
         if args.logger_args is not None:
             charts = [
-                spec(x=x, y=y, scale_type="log" if LOSS in y else "linear")
+                spec(x=EPOCH, y=y, scale_type="log" if LOSS in y else "linear")
                 for y in (
                     LOSS,
+                    TEST_LOSS,
                     ACCURACY,
                     TEST_ACCURACY,
                     EXPECTED_REGRET,
                     TEST_EXPECTED_REGRET,
-                    TEST_LOSS,
+                    EXPECTED_RETURN,
+                    TEST_EXPECTED_RETURN,
+                    CORRECT_MAX,
+                    TEST_CORRECT_MAX,
                     SAVE_COUNT,
                     FPS,
                 )
-                for x in (HOURS, EPOCH)
+            ] + [
+                spec(x=HOURS, y=y, scale_type="log")
+                for y in (
+                    LOSS,
+                    TEST_LOSS,
+                )
             ]
             sweep_id = getattr(args, "sweep_id", None)
             parameters = logger.create_run(
