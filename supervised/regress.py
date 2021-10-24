@@ -340,7 +340,7 @@ def train(args: Args, logger: HasuraLogger):
         correct_target = raw_targets[distances.argmin(0)] == raw_targets
         return get_metric(correct_target[is_dataset])
 
-    def get_expected_stuff(is_dataset: torch.Tensor, raw_outputs: torch.Tensor):
+    def get_goal_dependent_stuff(is_dataset: torch.Tensor, raw_outputs: torch.Tensor):
         def get_expected_return(values: torch.Tensor):
             v = F.pad(values, (1, 1), value=-float("inf"))
 
@@ -357,22 +357,19 @@ def train(args: Args, logger: HasuraLogger):
         out = torch.split(raw_outputs[is_dataset], list(goals_count))
         tgt = torch.split(raw_targets[is_dataset], list(goals_count))
 
-        expected, optimal, correct_max = torch.tensor(
-            [
+        expected, optimal, correct_max = zip(
+            *[
                 (
-                    get_expected_return(o)[g].item(),
-                    get_expected_return(t)[g].item(),
+                    get_expected_return(o)[g],
+                    get_expected_return(t)[g],
                     o.argmax() == t.argmax(),
                 )
                 for g, o, t in zip(unique_goals, out, tgt)
             ]
-        ).T
-
-        return (
-            get_metric(expected),
-            get_metric(optimal - expected),
-            get_metric(correct_max),
         )
+
+        regret = torch.tensor(optimal) - torch.tensor(expected)
+        return [sum(x) / len(x) for x in (expected, regret, correct_max)]
 
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
     for epoch in range(1, args.epochs + 1):
@@ -388,8 +385,8 @@ def train(args: Args, logger: HasuraLogger):
                     test_loss += F.mse_loss(output.flatten(), target.flatten()).item()
 
             test_output = model(raw_inputs)
-            test_return_, test_regret, test_correct_max = get_expected_stuff(
-                raw_is_test, test_output
+            test_return_, test_regret, test_correct_max = map(
+                get_metric, get_goal_dependent_stuff(raw_is_test, test_output)
             )
             log = {
                 EPOCH: epoch,
@@ -407,36 +404,36 @@ def train(args: Args, logger: HasuraLogger):
 
         frames = 0
         tick = time.time()
-        for batch_idx, (data, target) in enumerate(train_loader):
-            frames += len(data)
-            data, target = data.to(device), target.to(device)
-            optimizer.zero_grad()
-            output = model(data)
-            loss = F.mse_loss(output.flatten(), target.flatten())
-            loss.backward()
-            optimizer.step()
-            if batch_idx == 0 and log_epoch:
-                raw_output = model(raw_inputs)
-                return_, regret, correct_max = get_expected_stuff(
-                    ~raw_is_test, raw_output
-                )
-                log = {
-                    EPOCH: epoch,
-                    LOSS: loss.item(),
-                    RUN_ID: logger.run_id,
-                    HOURS: (time.time() - start) / 3600,
-                    ACCURACY: get_accuracy(~raw_is_test, raw_output),
-                    CORRECT_MAX: correct_max,
-                    EXPECTED_REGRET: regret,
-                    EXPECTED_RETURN: return_,
-                    SAVE_COUNT: save_count,
-                }
-                pprint(log)
-                if logger.run_id is not None:
-                    logger.log(log)
 
-                if args.dry_run:
-                    break
+        optimizer.zero_grad()
+        raw_output = model(raw_inputs)
+        return_, regret, correct_max = get_goal_dependent_stuff(
+            ~raw_is_test, raw_output
+        )
+        loss = -return_.mean()
+        loss.backward()
+        optimizer.step()
+        raw_output = model(raw_inputs)
+        return_, regret, correct_max = map(
+            get_metric, get_goal_dependent_stuff(~raw_is_test, raw_output)
+        )
+        log = {
+            EPOCH: epoch,
+            LOSS: loss.item(),
+            RUN_ID: logger.run_id,
+            HOURS: (time.time() - start) / 3600,
+            ACCURACY: get_accuracy(~raw_is_test, raw_output),
+            CORRECT_MAX: correct_max,
+            EXPECTED_REGRET: regret,
+            EXPECTED_RETURN: return_,
+            SAVE_COUNT: save_count,
+        }
+        pprint(log)
+        if logger.run_id is not None:
+            logger.log(log)
+
+        if args.dry_run:
+            break
 
         if log_epoch:
             now = time.time()
