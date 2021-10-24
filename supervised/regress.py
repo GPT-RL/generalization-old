@@ -9,7 +9,6 @@ from pprint import pprint
 from typing import Literal, Optional, cast, get_args
 
 import numpy as np
-import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -254,12 +253,6 @@ def train(args: Args, logger: HasuraLogger):
     obs = np.tile(np.eye(args.max_integer), (args.max_integer, 1))
     goal = np.repeat(np.arange(args.max_integer), args.max_integer)
 
-    def get_divisors():
-        divisor = 1
-        while divisor <= args.max_integer:
-            divisor *= 10
-            yield divisor
-
     tokenizer = GPT2Tokenizer.from_pretrained(get_gpt_size(args.embedding_size))
 
     def tokenize():
@@ -270,12 +263,8 @@ def train(args: Args, logger: HasuraLogger):
     tokenized = list(tokenize())
     tokenized = pad_sequence(tokenized, padding_value=tokenizer.eos_token_id).T
     targets = compute_targets(_inputs=obs, _goals=goal)
-    is_test = [
-        goal == args.test_integer,
-        *((goal % d) == args.test_integer for d in get_divisors()),
-    ]
-    is_test = np.stack(is_test)
-    is_test = is_test.any(axis=0)
+    is_test = [str(args.test_integer) in str(g) for g in goal]
+    is_test = np.array(is_test)
     data = np.stack(
         [targets, is_test],
         axis=1,
