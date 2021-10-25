@@ -286,9 +286,7 @@ query Query($id: Int) {
             INDEX = INDEX - 1
             redraw()
             return
-        elif (
-            event.key == "right" and INDEX < len(time_steps) - 1
-        ):
+        elif event.key == "right" and INDEX < len(time_steps) - 1:
             INDEX = INDEX + 1
             redraw()
             return

@@ -261,8 +261,12 @@ def train(args: Args, logger: HasuraLogger):
     targets = abs(goal - obs.argmax(-1))
     if args.discount is not None:
         targets = args.discount ** targets
-    is_test = [str(args.test_integer) in str(g) for g in goal]
-    is_test = torch.tensor(is_test)
+    is_train = [str(args.test_integer) not in str(g) for g in goal]
+    is_train = torch.tensor(is_train)
+    is_test = cast(torch.Tensor, goal == args.test_integer)
+    test_code = 1
+    train_code = 2
+    dataset = cast(torch.Tensor, test_code * is_test + train_code * is_train)
 
     tokenizer = GPT2Tokenizer.from_pretrained(get_gpt_size(args.embedding_size))
 
@@ -275,12 +279,12 @@ def train(args: Args, logger: HasuraLogger):
     raw_tokenized = pad_sequence(raw_tokenized, padding_value=tokenizer.eos_token_id).T
     tokenized = torch.repeat_interleave(raw_tokenized, args.max_integer, dim=0)
 
-    data = torch.stack([targets, is_test], dim=1)
+    data = torch.stack([targets, dataset], dim=1)
     data = torch.cat([obs, tokenized, data], dim=1)
     raw_inputs = data[:, : args.max_integer + 1]
     raw_inputs = raw_inputs.to(device)
     raw_targets = targets.to(device)
-    raw_is_test = is_test.to(device)
+    raw_dataset = dataset.to(device)
     raw_goal = torch.sort(goal.to(device)).values
 
     def repeat_data(in_dataset, batch_size):
@@ -289,8 +293,8 @@ def train(args: Args, logger: HasuraLogger):
 
     data = torch.cat(
         [
-            repeat_data(~is_test, args.batch_size),
-            repeat_data(is_test, args.test_batch_size),
+            repeat_data(raw_dataset == train_code, args.batch_size),
+            repeat_data(raw_dataset == test_code, args.test_batch_size),
         ],
         dim=0,
     )
@@ -298,11 +302,15 @@ def train(args: Args, logger: HasuraLogger):
     torch.manual_seed(args.seed)
     data = data[torch.randperm(len(data))]
 
-    inputs, targets, is_test = torch.split(data, [args.max_integer + 1, 1, 1], dim=-1)
-    is_test = is_test.bool().squeeze(-1)
+    inputs, targets, dataset = torch.split(data, [args.max_integer + 1, 1, 1], dim=-1)
+    dataset = dataset.flatten()
 
-    train_dataset = _Dataset(inputs=inputs[~is_test], targets=targets[~is_test])
-    test_dataset = _Dataset(inputs=inputs[is_test], targets=targets[is_test])
+    train_dataset = _Dataset(
+        inputs=inputs[dataset == train_code], targets=targets[dataset == train_code]
+    )
+    test_dataset = _Dataset(
+        inputs=inputs[dataset == test_code], targets=targets[dataset == test_code]
+    )
 
     train_loader = torch.utils.data.DataLoader(train_dataset, **train_kwargs)
     test_loader = torch.utils.data.DataLoader(test_dataset, **test_kwargs)
@@ -340,7 +348,7 @@ def train(args: Args, logger: HasuraLogger):
         correct_target = raw_targets[distances.argmin(0)] == raw_targets
         return get_metric(correct_target[is_dataset])
 
-    def get_expected_stuff(is_dataset: torch.Tensor, raw_outputs: torch.Tensor):
+    def get_goal_dependent_stuff(is_dataset: torch.Tensor, raw_outputs: torch.Tensor):
         def get_expected_return(values: torch.Tensor):
             v = F.pad(values, (1, 1), value=-float("inf"))
 
@@ -388,13 +396,13 @@ def train(args: Args, logger: HasuraLogger):
                     test_loss += F.mse_loss(output.flatten(), target.flatten()).item()
 
             test_output = model(raw_inputs)
-            test_return_, test_regret, test_correct_max = get_expected_stuff(
-                raw_is_test, test_output
+            test_return_, test_regret, test_correct_max = get_goal_dependent_stuff(
+                raw_dataset == test_code, test_output
             )
             log = {
                 EPOCH: epoch,
                 TEST_LOSS: test_loss,
-                TEST_ACCURACY: get_accuracy(raw_is_test, test_output),
+                TEST_ACCURACY: get_accuracy(raw_dataset == test_code, test_output),
                 TEST_CORRECT_MAX: test_correct_max,
                 TEST_EXPECTED_REGRET: test_regret,
                 TEST_EXPECTED_RETURN: test_return_,
@@ -417,15 +425,15 @@ def train(args: Args, logger: HasuraLogger):
             optimizer.step()
             if batch_idx == 0 and log_epoch:
                 raw_output = model(raw_inputs)
-                return_, regret, correct_max = get_expected_stuff(
-                    ~raw_is_test, raw_output
+                return_, regret, correct_max = get_goal_dependent_stuff(
+                    raw_dataset == train_code, raw_output
                 )
                 log = {
                     EPOCH: epoch,
                     LOSS: loss.item(),
                     RUN_ID: logger.run_id,
                     HOURS: (time.time() - start) / 3600,
-                    ACCURACY: get_accuracy(~raw_is_test, raw_output),
+                    ACCURACY: get_accuracy(raw_dataset == train_code, raw_output),
                     CORRECT_MAX: correct_max,
                     EXPECTED_REGRET: regret,
                     EXPECTED_RETURN: return_,
