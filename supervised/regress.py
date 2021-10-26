@@ -146,7 +146,7 @@ class Net(nn.Module):
 
     def forward(self, x):
         x1, x2 = torch.split(x, [self.max_int, self.size_goal], dim=-1)
-        KQ = self.embedding1(x1)
+        KQ = torch.sigmoid(self.embedding1(x1))
         V = x2
         torch_sum = torch.sum(KQ * V, dim=-1, keepdim=True)
         return self.net(torch_sum)
