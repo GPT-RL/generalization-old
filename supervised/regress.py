@@ -161,7 +161,7 @@ class Net(nn.Module):
         # V = V[..., -1]
 
         agreement = (KQ * V ** 2) + (1 - KQ) * (1 - V) ** 2
-        return agreement.prod(-1)
+        return torch.sigmoid(agreement.sum(-1))
 
     def anneal_temp(self):
         self.tau = self.tau * self.tau_annealment
