@@ -127,11 +127,11 @@ class Net(nn.Module):
 
         self.embedding1 = nn.Sequential(
             linearity,
-            nn.Linear(hidden_size, 2 * hidden_size),
+            nn.Linear(hidden_size, hidden_size),
         )
         self.embedding2 = nn.Sequential(
             # gpt,
-            nn.Linear(self.size_goal, 2 * hidden_size)
+            nn.Linear(self.size_goal, hidden_size)
         )
         self.net = nn.Linear(1, 1)
         self.register_buffer("tau", torch.tensor(tau))
@@ -150,13 +150,15 @@ class Net(nn.Module):
 
     def forward(self, x):
         x1, x2 = torch.split(x, [self.max_int, self.size_goal], dim=-1)
-        KQ = self.embedding1(x1).reshape(x.size(0), -1, 2)
-        KQ = F.gumbel_softmax(KQ, hard=False, tau=self.tau, dim=-1)
-        KQ = KQ[..., -1]
+        KQ = self.embedding1(x1)
+        KQ = torch.sigmoid(KQ)
+        # KQ = F.gumbel_softmax(KQ, hard=False, tau=self.tau, dim=-1)
+        # KQ = KQ[..., -1]
 
-        V = self.embedding2(x2).reshape(x.size(0), -1, 2)
-        V = F.gumbel_softmax(V, hard=False, tau=self.tau, dim=-1)
-        V = V[..., -1]
+        V = self.embedding2(x2)
+        V = torch.sigmoid(V)
+        # V = F.gumbel_softmax(V, hard=False, tau=self.tau, dim=-1)
+        # V = V[..., -1]
 
         agreement = (KQ * V ** 2) + (1 - KQ) * (1 - V) ** 2
         return agreement.prod(-1)
