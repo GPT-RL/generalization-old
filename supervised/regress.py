@@ -119,16 +119,16 @@ class Net(nn.Module):
             get_gpt_size(embedding_size)
         ).n_embd
         # gpt = GPTEmbed(embedding_size=embedding_size, inputs=inputs, **kwargs)
-        linearity = nn.Linear(max_int, self.embedding_size, bias=False)
+        linearity = nn.Linear(max_int, hidden_size, bias=False)
         nn.init.normal_(linearity.weight)
 
         self.embedding1 = nn.Sequential(
             linearity,
-            nn.Linear(self.embedding_size, hidden_size),
+            nn.Linear(hidden_size, max_int),
         )
         self.embedding2 = nn.Sequential(
             # gpt,
-            nn.Linear(self.size_goal, hidden_size)
+            nn.Linear(self.size_goal, max_int)
         )
         self.net = nn.Sequential(
             nn.Linear(
@@ -145,9 +145,9 @@ class Net(nn.Module):
 
     def forward(self, x):
         x1, x2 = torch.split(x, [self.max_int, self.size_goal], dim=-1)
-        x = self.embedding1(x1) * self.embedding2(x2)
-
-        return self.net(x).squeeze(-1)
+        KQ = torch.softmax(self.embedding1(x1), dim=-1)
+        V = self.embedding2(x2)
+        return torch.sum(KQ * V, dim=-1)
 
 
 def get_gpt_size(gpt_size: GPTSize):
