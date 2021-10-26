@@ -133,6 +133,7 @@ class Net(nn.Module):
             nn.Linear(self.size_goal, max_int)
         )
         self.net = nn.Linear(1, 1)
+        self.register_buffer("temp", torch.tensor(10.0))
         # self.net = nn.Sequential(
         #     nn.Linear(
         #         hidden_size,
@@ -148,11 +149,16 @@ class Net(nn.Module):
 
     def forward(self, x):
         x1, x2 = torch.split(x, [self.max_int, self.size_goal], dim=-1)
-        KQ = torch.sigmoid(self.embedding1(x1))
-        KQ = F.gumbel_softmax(KQ, hard=self.hard_gumbel)
+        KQ = F.gumbel_softmax(
+            self.embedding1(x1), hard=self.hard_gumbel, tau=self.temp, dim=-1
+        )
+
         V = x2
         agreement = (KQ * V ** 2) + (1 - KQ) * (1 - V) ** 2
         return agreement.prod(-1)
+
+    def anneal_temp(self):
+        self.temp = self.temp * 0.99
 
 
 def get_gpt_size(gpt_size: GPTSize):
@@ -466,6 +472,7 @@ def train(args: Args, logger: HasuraLogger):
             if logger.run_id is not None:
                 logger.log(log)
         scheduler.step()
+        model.anneal_temp()
 
         if args.save_model:
             torch.save(model.state_dict(), str(save_path))
