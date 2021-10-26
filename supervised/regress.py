@@ -147,7 +147,7 @@ class Net(nn.Module):
         x1, x2 = torch.split(x, [self.max_int, self.size_goal], dim=-1)
         KQ = torch.softmax(self.embedding1(x1), dim=-1)
         V = self.embedding2(x2)
-        return torch.sum(KQ * V, dim=-1)
+        return torch.sum(x1 * V, dim=-1)
 
 
 def get_gpt_size(gpt_size: GPTSize):
