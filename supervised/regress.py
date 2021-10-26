@@ -145,7 +145,8 @@ class Net(nn.Module):
 
     def forward(self, x):
         x1, x2 = torch.split(x, [self.max_int, self.size_goal], dim=-1)
-        x = self.embedding1(x1) * self.embedding2(x2)
+        emb2 = x2.unsqueeze(-1) * self.embedding2[0].weight.T.unsqueeze(0)
+        x = self.embedding1(x1) * emb2.prod(1)
 
         return self.net(x).squeeze(-1)
 
