@@ -260,7 +260,7 @@ def train(args: Args, logger: HasuraLogger):
     obs = torch.tile(torch.eye(args.max_integer), (args.max_integer, 1))
     raw_goal = torch.arange(args.max_integer)
     goal = torch.repeat_interleave(raw_goal, args.max_integer)
-    targets = (goal - obs.argmax(-1)).float()
+    targets = abs(goal - obs.argmax(-1)).float()
     # if args.discount is not None:
     #     targets = args.discount ** targets
     is_train = [str(args.test_integer) not in str(g) for g in goal]
