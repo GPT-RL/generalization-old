@@ -79,24 +79,26 @@ class GPTEmbed(nn.Module):
             requires_grad = (train_wpe and "wpe" in name) or (train_ln and "ln" in name)
             p.requires_grad_(requires_grad)
 
-        gpt = nn.Sequential(
+        gpt_embed = nn.Sequential(
             Lambda(lambda x: x.long()),
             gpt,
             Lambda(lambda x: x.last_hidden_state[:, -1]),
         )
-        if (train_ln or train_wpe) and (architecture in [RANDOMIZED, PRETRAINED]):
-            self.net = gpt
+        gpt_architecture = architecture in [RANDOMIZED, PRETRAINED]
+        if gpt_architecture:
+            if train_ln or train_wpe:
+                self.net = gpt_embed
+            else:
+                num_embeddings = int(inputs.max() + 1)
+                dummy_tokens = torch.arange(num_embeddings).unsqueeze(-1)
+                embeddings = gpt_embed(dummy_tokens)
+                self.net = nn.Sequential(
+                    Lambda(lambda x: x.long()),
+                    nn.Embedding.from_pretrained(embeddings),
+                    Lambda(lambda x: x[:, -1]),
+                )
         else:
-            num_embeddings = int(inputs.max() + 1)
-            dummy_tokens = torch.arange(num_embeddings).unsqueeze(-1)
-            embeddings = gpt(dummy_tokens)
-            self.net = nn.Sequential(
-                Lambda(lambda x: x.long()),
-                nn.Embedding(num_embeddings, int(embeddings.size(1)))
-                if architecture == BASELINE
-                else nn.Embedding.from_pretrained(embeddings),
-                Lambda(lambda x: x[:, -1]),
-            )
+            self.net = nn.Linear(inputs.size(-1), gpt.embed_dim)
 
     def forward(self, x, **_):
         return self.net(x)
@@ -109,21 +111,18 @@ class Net(nn.Module):
         hidden_size: int,
         max_int: int,
         n_layers: int,
-        inputs,
         **kwargs,
     ):
         super(Net, self).__init__()
         self.max_int = max_int
-        self.size_goal = inputs.size(-1)
         self.embedding_size = GPT2Config.from_pretrained(
             get_gpt_size(embedding_size)
         ).n_embd
 
+        first_layer = GPTEmbed(embedding_size=embedding_size, **kwargs)
         self.net = nn.Sequential(
-            nn.Linear(
-                inputs.size(-1),
-                hidden_size,
-            ),
+            first_layer,
+            nn.Linear(self.embedding_size, hidden_size),
             nn.ReLU(),
             *[
                 nn.Sequential(nn.Linear(hidden_size, hidden_size), nn.ReLU())
@@ -252,17 +251,29 @@ def train(args: Args, logger: HasuraLogger):
     train_code = 2
     dataset = cast(torch.Tensor, test_code * is_test + train_code * is_train)
 
-    def to_binary(g):
-        for n in tqdm(g, desc="Tokenizing data"):
-            yield torch.tensor(list(map(int, "{0:b}".format(n.item())))).flip(-1)
+    gpt_architecture = args.architecture in [RANDOMIZED, PRETRAINED]
+    if gpt_architecture:
+        tokenizer = GPT2Tokenizer.from_pretrained(get_gpt_size(args.embedding_size))
+    else:
+        tokenizer = None
 
-    binary = list(to_binary(goal))
-    binary = pad_sequence(binary, padding_value=0).T.flip(-1)
+    def generate_inputs():
+
+        for n in goal:
+            if tokenizer is None:
+                yield torch.tensor(list(map(int, "{0:b}".format(n.item())))).flip(-1)
+            else:
+                yield tokenizer.encode(f"{n}", return_tensors="pt").squeeze(0).flip(-1)
+
+    inputs = list(generate_inputs())
+
+    padding_value = tokenizer.eos_token_id if gpt_architecture else 0
+    inputs = pad_sequence(inputs, padding_value=padding_value).T.flip(-1)
 
     data = torch.stack([targets, dataset], dim=1)
 
-    data = torch.cat([binary, data], dim=-1)
-    raw_inputs = binary.float().to(device)
+    data = torch.cat([inputs, data], dim=-1)
+    raw_inputs = inputs.float().to(device)
     raw_targets = targets.to(device)
     raw_dataset = dataset.to(device)
 
@@ -281,7 +292,7 @@ def train(args: Args, logger: HasuraLogger):
     torch.manual_seed(args.seed)
     data = data[torch.randperm(len(data))]
 
-    inputs, targets, dataset = torch.split(data, [binary.size(-1), 1, 1], dim=-1)
+    inputs, targets, dataset = torch.split(data, [inputs.size(-1), 1, 1], dim=-1)
     dataset = dataset.flatten()
 
     train_dataset = _Dataset(
@@ -301,7 +312,7 @@ def train(args: Args, logger: HasuraLogger):
         train_wpe=args.train_wpe,
         train_ln=args.train_ln,
         max_int=args.max_integer,
-        inputs=binary,
+        inputs=inputs,
         n_layers=args.n_layers,
     ).to(device)
 
