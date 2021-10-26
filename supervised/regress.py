@@ -124,30 +124,32 @@ class Net(nn.Module):
 
         self.embedding1 = nn.Sequential(
             linearity,
-            nn.Linear(hidden_size, max_int),
+            nn.Linear(hidden_size, inputs.size(-1)),
         )
         self.embedding2 = nn.Sequential(
             # gpt,
             nn.Linear(self.size_goal, max_int)
         )
-        self.net = nn.Sequential(
-            nn.Linear(
-                hidden_size,
-                hidden_size,
-            ),
-            nn.ReLU(),
-            *[
-                nn.Sequential(nn.Linear(hidden_size, hidden_size), nn.ReLU())
-                for _ in range(n_layers)
-            ],
-            nn.Linear(hidden_size, 1),
-        )
+        self.net = nn.Linear(1, 1)
+        # self.net = nn.Sequential(
+        #     nn.Linear(
+        #         hidden_size,
+        #         hidden_size,
+        #     ),
+        #     nn.ReLU(),
+        #     *[
+        #         nn.Sequential(nn.Linear(hidden_size, hidden_size), nn.ReLU())
+        #         for _ in range(n_layers)
+        #     ],
+        #     nn.Linear(hidden_size, 1),
+        # )
 
     def forward(self, x):
         x1, x2 = torch.split(x, [self.max_int, self.size_goal], dim=-1)
-        KQ = torch.softmax(self.embedding1(x1), dim=-1)
-        V = self.embedding2(x2)
-        return torch.sum(x1 * V, dim=-1)
+        KQ = self.embedding1(x1)
+        V = x2
+        torch_sum = torch.sum(KQ * V, dim=-1, keepdim=True)
+        return self.net(torch_sum)
 
 
 def get_gpt_size(gpt_size: GPTSize):
@@ -366,20 +368,21 @@ def train(args: Args, logger: HasuraLogger):
         out = torch.split(raw_outputs[is_dataset], list(goals_count))
         tgt = torch.split(raw_targets[is_dataset], list(goals_count))
 
-        expected, optimal, correct_max = torch.tensor(
+        correct_max = torch.tensor(
             [
                 (
-                    get_expected_return(o)[g].item(),
-                    get_expected_return(t)[g].item(),
-                    o.argmax() == t.argmax(),
+                    # get_expected_return(o)[g].item(),
+                    # get_expected_return(t)[g].item(),
+                    o.argmax()
+                    == t.argmax(),
                 )
                 for g, o, t in zip(unique_goals, out, tgt)
             ]
         ).T
 
         return (
-            get_metric(expected),
-            get_metric(optimal - expected),
+            # get_metric(expected),
+            # get_metric(optimal - expected),
             get_metric(correct_max),
         )
 
@@ -397,7 +400,7 @@ def train(args: Args, logger: HasuraLogger):
                     test_loss += F.mse_loss(output.flatten(), target.flatten()).item()
 
             test_output = model(raw_inputs)
-            test_return_, test_regret, test_correct_max = get_goal_dependent_stuff(
+            test_correct_max = get_goal_dependent_stuff(
                 raw_dataset == test_code, test_output
             )
             log = {
@@ -405,8 +408,8 @@ def train(args: Args, logger: HasuraLogger):
                 TEST_LOSS: test_loss,
                 TEST_ACCURACY: get_accuracy(raw_dataset == test_code, test_output),
                 TEST_CORRECT_MAX: test_correct_max,
-                TEST_EXPECTED_REGRET: test_regret,
-                TEST_EXPECTED_RETURN: test_return_,
+                # TEST_EXPECTED_REGRET: test_regret,
+                # TEST_EXPECTED_RETURN: test_return_,
                 RUN_ID: logger.run_id,
                 HOURS: (time.time() - start) / 3600,
             }
@@ -426,7 +429,7 @@ def train(args: Args, logger: HasuraLogger):
             optimizer.step()
             if batch_idx == 0 and log_epoch:
                 raw_output = model(raw_inputs)
-                return_, regret, correct_max = get_goal_dependent_stuff(
+                correct_max = get_goal_dependent_stuff(
                     raw_dataset == train_code, raw_output
                 )
                 log = {
@@ -436,8 +439,8 @@ def train(args: Args, logger: HasuraLogger):
                     HOURS: (time.time() - start) / 3600,
                     ACCURACY: get_accuracy(raw_dataset == train_code, raw_output),
                     CORRECT_MAX: correct_max,
-                    EXPECTED_REGRET: regret,
-                    EXPECTED_RETURN: return_,
+                    # EXPECTED_REGRET: regret,
+                    # EXPECTED_RETURN: return_,
                     SAVE_COUNT: save_count,
                 }
                 pprint(log)
@@ -532,10 +535,10 @@ def main(args: ArgsType):
                     TEST_LOSS,
                     ACCURACY,
                     TEST_ACCURACY,
-                    EXPECTED_REGRET,
-                    TEST_EXPECTED_REGRET,
-                    EXPECTED_RETURN,
-                    TEST_EXPECTED_RETURN,
+                    # EXPECTED_REGRET,
+                    # TEST_EXPECTED_REGRET,
+                    # EXPECTED_RETURN,
+                    # TEST_EXPECTED_RETURN,
                     CORRECT_MAX,
                     TEST_CORRECT_MAX,
                     SAVE_COUNT,
