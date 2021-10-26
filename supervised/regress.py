@@ -114,10 +114,11 @@ class Net(nn.Module):
     ):
         super(Net, self).__init__()
         self.max_int = max_int
+        self.size_goal = inputs.size(-1)
         self.embedding_size = GPT2Config.from_pretrained(
             get_gpt_size(embedding_size)
         ).n_embd
-        gpt = GPTEmbed(embedding_size=embedding_size, inputs=inputs, **kwargs)
+        # gpt = GPTEmbed(embedding_size=embedding_size, inputs=inputs, **kwargs)
         linearity = nn.Linear(max_int, self.embedding_size, bias=False)
         nn.init.normal_(linearity.weight)
 
@@ -126,7 +127,8 @@ class Net(nn.Module):
             nn.Linear(self.embedding_size, hidden_size),
         )
         self.embedding2 = nn.Sequential(
-            gpt, nn.Linear(self.embedding_size, hidden_size)
+            # gpt,
+            nn.Linear(self.size_goal, hidden_size)
         )
         self.net = nn.Sequential(
             nn.Linear(
@@ -142,7 +144,7 @@ class Net(nn.Module):
         )
 
     def forward(self, x):
-        x1, x2 = torch.split(x, [self.max_int, 1], dim=-1)
+        x1, x2 = torch.split(x, [self.max_int, self.size_goal], dim=-1)
         x = self.embedding1(x1) * self.embedding2(x2)
 
         return self.net(x).squeeze(-1)
@@ -268,20 +270,17 @@ def train(args: Args, logger: HasuraLogger):
     train_code = 2
     dataset = cast(torch.Tensor, test_code * is_test + train_code * is_train)
 
-    tokenizer = GPT2Tokenizer.from_pretrained(get_gpt_size(args.embedding_size))
-
-    def tokenize(g):
+    def to_binary(g):
         for n in tqdm(g, desc="Tokenizing data"):
-            encode = tokenizer.encode(str(n.item()), return_tensors="pt")
-            yield encode.squeeze(0)
+            yield torch.tensor(list(map(int, "{0:b}".format(n.item())))).flip(-1)
 
-    raw_tokenized = list(tokenize(raw_goal))
-    raw_tokenized = pad_sequence(raw_tokenized, padding_value=tokenizer.eos_token_id).T
-    tokenized = torch.repeat_interleave(raw_tokenized, args.max_integer, dim=0)
+    raw_binary = list(to_binary(raw_goal))
+    raw_binary = pad_sequence(raw_binary, padding_value=0).T.flip(-1)
+    binary = torch.repeat_interleave(raw_binary, args.max_integer, dim=0)
 
     data = torch.stack([targets, dataset], dim=1)
-    data = torch.cat([obs, tokenized, data], dim=1)
-    raw_inputs = data[:, : args.max_integer + 1]
+    data = torch.cat([obs, binary, data], dim=1)
+    raw_inputs = data[:, : args.max_integer + raw_binary.size(-1)]
     raw_inputs = raw_inputs.to(device)
     raw_targets = targets.to(device)
     raw_dataset = dataset.to(device)
@@ -302,7 +301,9 @@ def train(args: Args, logger: HasuraLogger):
     torch.manual_seed(args.seed)
     data = data[torch.randperm(len(data))]
 
-    inputs, targets, dataset = torch.split(data, [args.max_integer + 1, 1, 1], dim=-1)
+    inputs, targets, dataset = torch.split(
+        data, [args.max_integer + raw_binary.size(-1), 1, 1], dim=-1
+    )
     dataset = dataset.flatten()
 
     train_dataset = _Dataset(
@@ -322,7 +323,7 @@ def train(args: Args, logger: HasuraLogger):
         train_wpe=args.train_wpe,
         train_ln=args.train_ln,
         max_int=args.max_integer,
-        inputs=raw_tokenized,
+        inputs=raw_binary,
         n_layers=args.n_layers,
     ).to(device)
 
