@@ -150,7 +150,7 @@ class Net(nn.Module):
     def forward(self, x):
         x1, x2 = torch.split(x, [self.max_int, self.size_goal], dim=-1)
         KQ = self.embedding1(x1).reshape(x.size(0), -1, 2)
-        KQ = F.gumbel_softmax(KQ, hard=self.hard_gumbel, tau=self.temp, dim=-1)
+        KQ = F.gumbel_softmax(KQ, hard=self.hard_gumbel, tau=1, dim=-1)
         KQ = KQ[..., -1]
 
         V = x2
