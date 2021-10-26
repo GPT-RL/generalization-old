@@ -144,9 +144,9 @@ class Net(nn.Module):
         #     nn.Linear(hidden_size, 1),
         # )
 
-    def forward(self, x):
+    def forward(self, x, temp):
         x1, x2 = torch.split(x, [self.max_int, self.size_goal], dim=-1)
-        KQ = torch.sigmoid(self.embedding1(x1))
+        KQ = torch.sigmoid(temp * self.embedding1(x1))
 
         V = x2
         agreement = (KQ * V ** 2) + (1 - KQ) * (1 - V) ** 2
@@ -342,6 +342,7 @@ def train(args: Args, logger: HasuraLogger):
     start = time.time()
 
     save_count = 0
+    temp = 1
 
     def get_metric(x: torch.Tensor):
         with torch.no_grad():
@@ -397,10 +398,10 @@ def train(args: Args, logger: HasuraLogger):
             with torch.no_grad():
                 for data, target in test_loader:
                     data, target = data.to(device), target.to(device)
-                    output = model(data)
+                    output = model(data, temp=temp)
                     test_loss += F.mse_loss(output.flatten(), target.flatten()).item()
 
-            test_output = model(raw_inputs)
+            test_output = model(raw_inputs, temp=temp)
             test_correct_max = get_goal_dependent_stuff(
                 raw_dataset == test_code, test_output
             )
@@ -424,12 +425,12 @@ def train(args: Args, logger: HasuraLogger):
             frames += len(data)
             data, target = data.to(device), target.to(device)
             optimizer.zero_grad()
-            output = model(data)
+            output = model(data, temp=temp)
             loss = F.mse_loss(output.flatten(), target.flatten())
             loss.backward()
             optimizer.step()
             if batch_idx == 0 and log_epoch:
-                raw_output = model(raw_inputs)
+                raw_output = model(raw_inputs, temp=temp)
                 correct_max = get_goal_dependent_stuff(
                     raw_dataset == train_code, raw_output
                 )
@@ -463,6 +464,7 @@ def train(args: Args, logger: HasuraLogger):
             if logger.run_id is not None:
                 logger.log(log)
         scheduler.step()
+        temp /= 0.98
 
         if args.save_model:
             torch.save(model.state_dict(), str(save_path))
