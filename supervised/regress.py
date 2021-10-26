@@ -323,7 +323,7 @@ def train(args: Args, logger: HasuraLogger):
             return torch.mean(x.float()).item()
 
     def get_accuracy(is_dataset: torch.Tensor, raw_outputs: torch.Tensor):
-        correct_target = raw_outputs.round() == raw_targets
+        correct_target = raw_outputs.round().flatten() == raw_targets
         return get_metric(correct_target[is_dataset])
 
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
