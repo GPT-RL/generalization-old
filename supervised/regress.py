@@ -109,12 +109,12 @@ class Net(nn.Module):
         hidden_size: int,
         max_int: int,
         n_layers: int,
-        temp_increase_rate: float,
+        hard_gumbel: bool,
         inputs,
         **kwargs,
     ):
         super(Net, self).__init__()
-        self.temp_increase_rate = temp_increase_rate
+        self.hard_gumbel = hard_gumbel
         self.max_int = max_int
         self.size_goal = inputs.size(-1)
         self.embedding_size = GPT2Config.from_pretrained(
@@ -133,7 +133,6 @@ class Net(nn.Module):
             nn.Linear(self.size_goal, max_int)
         )
         self.net = nn.Linear(1, 1)
-        self.register_buffer("temp", torch.tensor(1.0))
         # self.net = nn.Sequential(
         #     nn.Linear(
         #         hidden_size,
@@ -147,13 +146,10 @@ class Net(nn.Module):
         #     nn.Linear(hidden_size, 1),
         # )
 
-    def increase_temp(self):
-        self.temp = self.temp / self.temp_increase_rate
-
     def forward(self, x):
         x1, x2 = torch.split(x, [self.max_int, self.size_goal], dim=-1)
-        KQ = torch.sigmoid(self.temp.detach() * self.embedding1(x1))
-
+        KQ = torch.sigmoid(self.embedding1(x1))
+        KQ = F.gumbel_softmax(KQ, hard=self.hard_gumbel)
         V = x2
         agreement = (KQ * V ** 2) + (1 - KQ) * (1 - V) ** 2
         return agreement.prod(-1)
@@ -215,6 +211,7 @@ class Args(Tap):
     epochs: int = 14
     gamma: float = 0.99
     graphql_endpoint: str = os.getenv("GRAPHQL_ENDPOINT")
+    hard_gumbel: bool = False
     hidden_size: int = 512
     host_machine: str = os.getenv("HOST_MACHINE")
     load_id: int = None  # path to load parameters from if at all
@@ -227,8 +224,6 @@ class Args(Tap):
     architecture: ARCHITECTURE = PRETRAINED
     save_model: bool = False
     seed: int = 1
-    temp: float = 35
-    temp_increase_rate: float = 0.98
     test_batch_size: int = 1000
     test_integer: int = 2
     train_ln: bool = False
@@ -334,8 +329,8 @@ def train(args: Args, logger: HasuraLogger):
         train_ln=args.train_ln,
         max_int=args.max_integer,
         inputs=raw_binary,
-        temp_increase_rate=args.temp_increase_rate,
         n_layers=args.n_layers,
+        hard_gumbel=args.hard_gumbel,
     ).to(device)
 
     save_path = get_save_path(logger.run_id)
@@ -365,7 +360,7 @@ def train(args: Args, logger: HasuraLogger):
             v = F.pad(values, (1, 1), value=-float("inf"))
 
             triples = torch.stack([v[:-2], v[1:-1], v[2:]]).T
-            pi = torch.softmax(cast(torch.Tensor, triples * args.temp), dim=-1)
+            pi = torch.softmax(cast(torch.Tensor, triples), dim=-1)
             T = (
                 torch.diag(pi[1:, 0], -1)
                 + torch.diag(pi[:, 1])
@@ -471,7 +466,6 @@ def train(args: Args, logger: HasuraLogger):
             if logger.run_id is not None:
                 logger.log(log)
         scheduler.step()
-        model.increase_temp()
 
         if args.save_model:
             torch.save(model.state_dict(), str(save_path))
