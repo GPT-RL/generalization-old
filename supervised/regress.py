@@ -109,10 +109,12 @@ class Net(nn.Module):
         hidden_size: int,
         max_int: int,
         n_layers: int,
+        temp_increase_rate: float,
         inputs,
         **kwargs,
     ):
         super(Net, self).__init__()
+        self.temp_increase_rate = temp_increase_rate
         self.max_int = max_int
         self.size_goal = inputs.size(-1)
         self.embedding_size = GPT2Config.from_pretrained(
@@ -146,7 +148,7 @@ class Net(nn.Module):
         # )
 
     def increase_temp(self):
-        self.temp = self.temp / 0.99
+        self.temp = self.temp / self.temp_increase_rate
 
     def forward(self, x):
         x1, x2 = torch.split(x, [self.max_int, self.size_goal], dim=-1)
@@ -226,6 +228,7 @@ class Args(Tap):
     save_model: bool = False
     seed: int = 1
     temp: float = 35
+    temp_increase_rate: float = 0.98
     test_batch_size: int = 1000
     test_integer: int = 2
     train_ln: bool = False
@@ -331,6 +334,7 @@ def train(args: Args, logger: HasuraLogger):
         train_ln=args.train_ln,
         max_int=args.max_integer,
         inputs=raw_binary,
+        temp_increase_rate=args.temp_increase_rate,
         n_layers=args.n_layers,
     ).to(device)
 
