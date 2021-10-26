@@ -105,16 +105,17 @@ class GPTEmbed(nn.Module):
 class Net(nn.Module):
     def __init__(
         self,
+        tau_annealment: float,
         embedding_size: GPTSize,
         hidden_size: int,
         max_int: int,
         n_layers: int,
-        hard_gumbel: bool,
+        tau: float,
         inputs,
         **kwargs,
     ):
         super(Net, self).__init__()
-        self.hard_gumbel = hard_gumbel
+        self.tau_annealment = tau_annealment
         self.max_int = max_int
         self.size_goal = inputs.size(-1)
         self.embedding_size = GPT2Config.from_pretrained(
@@ -133,7 +134,7 @@ class Net(nn.Module):
             nn.Linear(self.size_goal, max_int)
         )
         self.net = nn.Linear(1, 1)
-        self.register_buffer("temp", torch.tensor(10.0))
+        self.register_buffer("tau", torch.tensor(tau))
         # self.net = nn.Sequential(
         #     nn.Linear(
         #         hidden_size,
@@ -150,7 +151,7 @@ class Net(nn.Module):
     def forward(self, x):
         x1, x2 = torch.split(x, [self.max_int, self.size_goal], dim=-1)
         KQ = self.embedding1(x1).reshape(x.size(0), -1, 2)
-        KQ = F.gumbel_softmax(KQ, hard=self.hard_gumbel, tau=1, dim=-1)
+        KQ = F.gumbel_softmax(KQ, hard=False, tau=self.tau, dim=-1)
         KQ = KQ[..., -1]
 
         V = x2
@@ -158,7 +159,7 @@ class Net(nn.Module):
         return agreement.prod(-1)
 
     def anneal_temp(self):
-        self.temp = self.temp * 0.99
+        self.tau = self.tau * self.tau_annealment
 
 
 def get_gpt_size(gpt_size: GPTSize):
@@ -208,6 +209,7 @@ def configure_logger_args(args: Tap):
 
 
 class Args(Tap):
+    tau_annealment: float = 0.99
     batch_size: int = 32
     config: Optional[str] = None  # If given, yaml config from which to load params
     data_path: str = "data.zip"
@@ -217,7 +219,6 @@ class Args(Tap):
     epochs: int = 14
     gamma: float = 0.99
     graphql_endpoint: str = os.getenv("GRAPHQL_ENDPOINT")
-    hard_gumbel: bool = False
     hidden_size: int = 512
     host_machine: str = os.getenv("HOST_MACHINE")
     load_id: int = None  # path to load parameters from if at all
@@ -230,6 +231,7 @@ class Args(Tap):
     architecture: ARCHITECTURE = PRETRAINED
     save_model: bool = False
     seed: int = 1
+    tau: float = 2.0
     test_batch_size: int = 1000
     test_integer: int = 2
     train_ln: bool = False
@@ -328,6 +330,7 @@ def train(args: Args, logger: HasuraLogger):
     test_loader = torch.utils.data.DataLoader(test_dataset, **test_kwargs)
 
     model = Net(
+        tau=args.tau,
         embedding_size=args.embedding_size,
         hidden_size=args.hidden_size,
         architecture=args.architecture,
@@ -336,7 +339,7 @@ def train(args: Args, logger: HasuraLogger):
         max_int=args.max_integer,
         inputs=raw_binary,
         n_layers=args.n_layers,
-        hard_gumbel=args.hard_gumbel,
+        tau_annealment=args.tau_annealment,
     ).to(device)
 
     save_path = get_save_path(logger.run_id)
