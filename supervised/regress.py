@@ -105,66 +105,35 @@ class GPTEmbed(nn.Module):
 class Net(nn.Module):
     def __init__(
         self,
-        tau_annealment: float,
         embedding_size: GPTSize,
         hidden_size: int,
         max_int: int,
         n_layers: int,
-        tau: float,
         inputs,
         **kwargs,
     ):
         super(Net, self).__init__()
-        self.tau_annealment = tau_annealment
         self.max_int = max_int
         self.size_goal = inputs.size(-1)
         self.embedding_size = GPT2Config.from_pretrained(
             get_gpt_size(embedding_size)
         ).n_embd
-        # gpt = GPTEmbed(embedding_size=embedding_size, inputs=inputs, **kwargs)
-        linearity = nn.Linear(max_int, hidden_size, bias=False)
-        nn.init.normal_(linearity.weight)
 
-        self.embedding1 = nn.Sequential(
-            linearity,
-            nn.Linear(hidden_size, hidden_size),
+        self.net = nn.Sequential(
+            nn.Linear(
+                inputs.size(-1),
+                hidden_size,
+            ),
+            nn.ReLU(),
+            *[
+                nn.Sequential(nn.Linear(hidden_size, hidden_size), nn.ReLU())
+                for _ in range(n_layers)
+            ],
+            nn.Linear(hidden_size, 1),
         )
-        self.embedding2 = nn.Sequential(
-            # gpt,
-            nn.Linear(self.size_goal, hidden_size)
-        )
-        self.net = nn.Linear(1, 1)
-        self.register_buffer("tau", torch.tensor(tau))
-        # self.net = nn.Sequential(
-        #     nn.Linear(
-        #         hidden_size,
-        #         hidden_size,
-        #     ),
-        #     nn.ReLU(),
-        #     *[
-        #         nn.Sequential(nn.Linear(hidden_size, hidden_size), nn.ReLU())
-        #         for _ in range(n_layers)
-        #     ],
-        #     nn.Linear(hidden_size, 1),
-        # )
 
     def forward(self, x):
-        x1, x2 = torch.split(x, [self.max_int, self.size_goal], dim=-1)
-        KQ = self.embedding1(x1)
-        KQ = torch.sigmoid(KQ)
-        # KQ = F.gumbel_softmax(KQ, hard=False, tau=self.tau, dim=-1)
-        # KQ = KQ[..., -1]
-
-        V = self.embedding2(x2)
-        V = torch.sigmoid(V)
-        # V = F.gumbel_softmax(V, hard=False, tau=self.tau, dim=-1)
-        # V = V[..., -1]
-
-        agreement = (KQ * V ** 2) + (1 - KQ) * (1 - V) ** 2
-        return torch.sigmoid(agreement.sum(-1))
-
-    def anneal_temp(self):
-        self.tau = self.tau * self.tau_annealment
+        return self.net(x)
 
 
 def get_gpt_size(gpt_size: GPTSize):
@@ -214,7 +183,6 @@ def configure_logger_args(args: Tap):
 
 
 class Args(Tap):
-    tau_annealment: float = 0.99
     batch_size: int = 32
     config: Optional[str] = None  # If given, yaml config from which to load params
     data_path: str = "data.zip"
@@ -236,7 +204,6 @@ class Args(Tap):
     architecture: ARCHITECTURE = PRETRAINED
     save_model: bool = False
     seed: int = 1
-    tau: float = 2.0
     test_batch_size: int = 1000
     test_integer: int = 2
     train_ln: bool = False
@@ -275,15 +242,12 @@ def train(args: Args, logger: HasuraLogger):
         train_kwargs.update(cuda_kwargs)
         test_kwargs.update(cuda_kwargs)
 
-    obs = torch.tile(torch.eye(args.max_integer), (args.max_integer, 1))
-    raw_goal = torch.arange(args.max_integer)
-    goal = torch.repeat_interleave(raw_goal, args.max_integer)
-    targets = (goal == obs.argmax(-1)).float()
+    goal = torch.arange(args.max_integer)
+    targets = goal.float()
     # if args.discount is not None:
     #     targets = args.discount ** targets
-    is_train = [str(args.test_integer) not in str(g) for g in goal]
-    is_train = torch.tensor(is_train)
     is_test = cast(torch.Tensor, goal == args.test_integer)
+    is_train = ~is_test
     test_code = 1
     train_code = 2
     dataset = cast(torch.Tensor, test_code * is_test + train_code * is_train)
@@ -292,17 +256,15 @@ def train(args: Args, logger: HasuraLogger):
         for n in tqdm(g, desc="Tokenizing data"):
             yield torch.tensor(list(map(int, "{0:b}".format(n.item())))).flip(-1)
 
-    raw_binary = list(to_binary(raw_goal))
-    raw_binary = pad_sequence(raw_binary, padding_value=0).T.flip(-1)
-    binary = torch.repeat_interleave(raw_binary, args.max_integer, dim=0)
+    binary = list(to_binary(goal))
+    binary = pad_sequence(binary, padding_value=0).T.flip(-1)
 
     data = torch.stack([targets, dataset], dim=1)
-    data = torch.cat([obs, binary, data], dim=1)
-    raw_inputs = data[:, : args.max_integer + raw_binary.size(-1)]
-    raw_inputs = raw_inputs.to(device)
+
+    data = torch.cat([binary, data], dim=-1)
+    raw_inputs = binary.float().to(device)
     raw_targets = targets.to(device)
     raw_dataset = dataset.to(device)
-    raw_goal = torch.sort(goal.to(device)).values
 
     def repeat_data(in_dataset, batch_size):
         tiles = int(torch.ceil(batch_size / sum(in_dataset)))
@@ -319,9 +281,7 @@ def train(args: Args, logger: HasuraLogger):
     torch.manual_seed(args.seed)
     data = data[torch.randperm(len(data))]
 
-    inputs, targets, dataset = torch.split(
-        data, [args.max_integer + raw_binary.size(-1), 1, 1], dim=-1
-    )
+    inputs, targets, dataset = torch.split(data, [binary.size(-1), 1, 1], dim=-1)
     dataset = dataset.flatten()
 
     train_dataset = _Dataset(
@@ -335,16 +295,14 @@ def train(args: Args, logger: HasuraLogger):
     test_loader = torch.utils.data.DataLoader(test_dataset, **test_kwargs)
 
     model = Net(
-        tau=args.tau,
         embedding_size=args.embedding_size,
         hidden_size=args.hidden_size,
         architecture=args.architecture,
         train_wpe=args.train_wpe,
         train_ln=args.train_ln,
         max_int=args.max_integer,
-        inputs=raw_binary,
+        inputs=binary,
         n_layers=args.n_layers,
-        tau_annealment=args.tau_annealment,
     ).to(device)
 
     save_path = get_save_path(logger.run_id)
@@ -365,44 +323,8 @@ def train(args: Args, logger: HasuraLogger):
             return torch.mean(x.float()).item()
 
     def get_accuracy(is_dataset: torch.Tensor, raw_outputs: torch.Tensor):
-        distances = torch.abs(raw_outputs - raw_targets.unsqueeze(-1))
-        correct_target = raw_targets[distances.argmin(0)] == raw_targets
+        correct_target = raw_outputs.round() == raw_targets
         return get_metric(correct_target[is_dataset])
-
-    def get_goal_dependent_stuff(is_dataset: torch.Tensor, raw_outputs: torch.Tensor):
-        def get_expected_return(values: torch.Tensor):
-            v = F.pad(values, (1, 1), value=-float("inf"))
-
-            triples = torch.stack([v[:-2], v[1:-1], v[2:]]).T
-            pi = torch.softmax(cast(torch.Tensor, triples), dim=-1)
-            T = (
-                torch.diag(pi[1:, 0], -1)
-                + torch.diag(pi[:, 1])
-                + torch.diag(pi[:-1, 2], 1)
-            )
-            return torch.matrix_power(T, 2 * args.max_integer).mean(0)
-
-        unique_goals, goals_count = raw_goal[is_dataset].unique(return_counts=True)
-        out = torch.split(raw_outputs[is_dataset], list(goals_count))
-        tgt = torch.split(raw_targets[is_dataset], list(goals_count))
-
-        correct_max = torch.tensor(
-            [
-                (
-                    # get_expected_return(o)[g].item(),
-                    # get_expected_return(t)[g].item(),
-                    o.argmax()
-                    == t.argmax(),
-                )
-                for g, o, t in zip(unique_goals, out, tgt)
-            ]
-        ).T
-
-        return (
-            # get_metric(expected),
-            # get_metric(optimal - expected),
-            get_metric(correct_max),
-        )
 
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
     for epoch in range(1, args.epochs + 1):
@@ -418,16 +340,10 @@ def train(args: Args, logger: HasuraLogger):
                     test_loss += F.mse_loss(output.flatten(), target.flatten()).item()
 
             test_output = model(raw_inputs)
-            test_correct_max = get_goal_dependent_stuff(
-                raw_dataset == test_code, test_output
-            )
             log = {
                 EPOCH: epoch,
                 TEST_LOSS: test_loss,
                 TEST_ACCURACY: get_accuracy(raw_dataset == test_code, test_output),
-                TEST_CORRECT_MAX: test_correct_max,
-                # TEST_EXPECTED_REGRET: test_regret,
-                # TEST_EXPECTED_RETURN: test_return_,
                 RUN_ID: logger.run_id,
                 HOURS: (time.time() - start) / 3600,
             }
@@ -447,18 +363,12 @@ def train(args: Args, logger: HasuraLogger):
             optimizer.step()
             if batch_idx == 0 and log_epoch:
                 raw_output = model(raw_inputs)
-                correct_max = get_goal_dependent_stuff(
-                    raw_dataset == train_code, raw_output
-                )
                 log = {
                     EPOCH: epoch,
                     LOSS: loss.item(),
                     RUN_ID: logger.run_id,
                     HOURS: (time.time() - start) / 3600,
                     ACCURACY: get_accuracy(raw_dataset == train_code, raw_output),
-                    CORRECT_MAX: correct_max,
-                    # EXPECTED_REGRET: regret,
-                    # EXPECTED_RETURN: return_,
                     SAVE_COUNT: save_count,
                 }
                 pprint(log)
@@ -480,7 +390,6 @@ def train(args: Args, logger: HasuraLogger):
             if logger.run_id is not None:
                 logger.log(log)
         scheduler.step()
-        model.anneal_temp()
 
         if args.save_model:
             torch.save(model.state_dict(), str(save_path))
@@ -554,12 +463,6 @@ def main(args: ArgsType):
                     TEST_LOSS,
                     ACCURACY,
                     TEST_ACCURACY,
-                    # EXPECTED_REGRET,
-                    # TEST_EXPECTED_REGRET,
-                    # EXPECTED_RETURN,
-                    # TEST_EXPECTED_RETURN,
-                    CORRECT_MAX,
-                    TEST_CORRECT_MAX,
                     SAVE_COUNT,
                     FPS,
                 )
