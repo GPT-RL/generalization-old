@@ -127,11 +127,11 @@ class Net(nn.Module):
 
         self.embedding1 = nn.Sequential(
             linearity,
-            nn.Linear(hidden_size, 2 * inputs.size(-1)),
+            nn.Linear(hidden_size, 2 * hidden_size),
         )
         self.embedding2 = nn.Sequential(
             # gpt,
-            nn.Linear(self.size_goal, max_int)
+            nn.Linear(self.size_goal, 2 * hidden_size)
         )
         self.net = nn.Linear(1, 1)
         self.register_buffer("tau", torch.tensor(tau))
@@ -154,7 +154,10 @@ class Net(nn.Module):
         KQ = F.gumbel_softmax(KQ, hard=False, tau=self.tau, dim=-1)
         KQ = KQ[..., -1]
 
-        V = x2
+        V = self.embedding2(x2).reshape(x.size(0), -1, 2)
+        V = F.gumbel_softmax(V, hard=False, tau=self.tau, dim=-1)
+        V = V[..., -1]
+
         agreement = (KQ * V ** 2) + (1 - KQ) * (1 - V) ** 2
         return agreement.prod(-1)
 
