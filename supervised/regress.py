@@ -238,14 +238,14 @@ def train(args: Args, logger: HasuraLogger):
 
     torch.manual_seed(args.seed)
 
-    device = torch.device("cuda" if use_cuda else "cpu")
-
     train_kwargs = {"batch_size": args.batch_size}
     test_kwargs = {"batch_size": args.test_batch_size}
     if use_cuda:
         cuda_kwargs = {"num_workers": 1, "pin_memory": True, "shuffle": True}
         train_kwargs.update(cuda_kwargs)
         test_kwargs.update(cuda_kwargs)
+
+    print("Generating data...")
 
     goal = torch.arange(args.max_integer)
     targets = goal.float()
@@ -279,9 +279,9 @@ def train(args: Args, logger: HasuraLogger):
     data = torch.stack([targets, dataset], dim=1)
 
     data = torch.cat([inputs, data], dim=-1)
-    raw_inputs = inputs.float().to(device)
-    raw_targets = targets.to(device)
-    raw_dataset = dataset.to(device)
+    raw_inputs = inputs.float()
+    raw_targets = targets
+    raw_dataset = dataset
 
     def repeat_data(in_dataset, batch_size):
         tiles = int(torch.ceil(batch_size / sum(in_dataset)))
@@ -310,6 +310,7 @@ def train(args: Args, logger: HasuraLogger):
 
     train_loader = torch.utils.data.DataLoader(train_dataset, **train_kwargs)
     test_loader = torch.utils.data.DataLoader(test_dataset, **test_kwargs)
+    print("Building model...")
 
     model = Net(
         embedding_size=args.embedding_size,
@@ -320,7 +321,14 @@ def train(args: Args, logger: HasuraLogger):
         max_int=args.max_integer,
         inputs=inputs,
         n_layers=args.n_layers,
-    ).to(device)
+    )
+    print("Copying to device...")
+    device = torch.device("cuda" if use_cuda else "cpu")
+    raw_inputs = raw_inputs.to(device)
+    raw_targets = raw_targets.to(device)
+    raw_dataset = raw_dataset.to(device)
+
+    model = model.to(device)
 
     save_path = get_save_path(logger.run_id)
     if args.load_id is not None:
@@ -344,6 +352,7 @@ def train(args: Args, logger: HasuraLogger):
         return get_metric(correct_target[is_dataset])
 
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
+    print("Training...")
     for epoch in range(1, args.epochs + 1):
 
         log_epoch = epoch % args.log_interval == 0
