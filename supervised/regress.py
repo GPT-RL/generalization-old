@@ -72,20 +72,24 @@ class GPTEmbed(nn.Module):
         train_wpe: bool,
         train_ln: bool,
         inputs: torch.Tensor,
+        hidden_size: int,
     ):
         super().__init__()
-        gpt = build_gpt(embedding_size, architecture == RANDOMIZED)
-        for name, p in gpt.named_parameters():
-            requires_grad = (train_wpe and "wpe" in name) or (train_ln and "ln" in name)
-            p.requires_grad_(requires_grad)
-
-        gpt_embed = nn.Sequential(
-            Lambda(lambda x: x.long()),
-            gpt,
-            Lambda(lambda x: x.last_hidden_state[:, -1]),
-        )
         gpt_architecture = architecture in [RANDOMIZED, PRETRAINED]
         if gpt_architecture:
+            print("Building GPT...")
+            gpt = build_gpt(embedding_size, architecture == RANDOMIZED)
+            for name, p in gpt.named_parameters():
+                requires_grad = (train_wpe and "wpe" in name) or (
+                    train_ln and "ln" in name
+                )
+                p.requires_grad_(requires_grad)
+
+            gpt_embed = nn.Sequential(
+                Lambda(lambda x: x.long()),
+                gpt,
+                Lambda(lambda x: x.last_hidden_state[:, -1]),
+            )
             if train_ln or train_wpe:
                 self.net = gpt_embed
             else:
@@ -97,8 +101,9 @@ class GPTEmbed(nn.Module):
                     nn.Embedding.from_pretrained(embeddings),
                     Lambda(lambda x: x[:, -1]),
                 )
+            self.net.add_module("output", nn.Linear(gpt.embed_dim, hidden_size))
         else:
-            self.net = nn.Linear(inputs.size(-1), gpt.embed_dim)
+            self.net = nn.Linear(inputs.size(-1), hidden_size)
 
     def forward(self, x, **_):
         return self.net(x)
@@ -119,10 +124,11 @@ class Net(nn.Module):
             get_gpt_size(embedding_size)
         ).n_embd
 
-        first_layer = GPTEmbed(embedding_size=embedding_size, **kwargs)
+        first_layer = GPTEmbed(
+            embedding_size=embedding_size, hidden_size=hidden_size, **kwargs
+        )
         self.net = nn.Sequential(
             first_layer,
-            nn.Linear(self.embedding_size, hidden_size),
             nn.ReLU(),
             *[
                 nn.Sequential(nn.Linear(hidden_size, hidden_size), nn.ReLU())
