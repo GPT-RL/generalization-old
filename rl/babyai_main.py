@@ -1,15 +1,20 @@
 import functools
-import itertools
-from typing import Generator, List, Literal, Union, cast
+import zipfile
 
 import gym
-from gym.wrappers import TimeLimit
+import itertools
+
+import numpy as np
+import pandas as pd
 import torch
+from gym.wrappers import TimeLimit
 from stable_baselines3.common.monitor import Monitor
 from torch.nn.utils.rnn import pad_sequence
 from transformers import GPT2Tokenizer
+from typing import Generator, List, Literal, Union, cast
 
 import main
+from antonyms import GPTSize
 from babyai_agent import Agent
 from babyai_env import (
     ActionInObsWrapper,
@@ -40,13 +45,28 @@ from babyai_env import (
 from descs import CardinalDirection, LocDesc, OrdinalDirection, RowDesc
 from envs import RenderWrapper, VecPyTorch
 from instrs import GoToLoc, GoToRow
+from antonyms import (
+    ANTONYM,
+    AntonymsEnv,
+    LEMMA,
+    NON_ANTONYM,
+    STRING,
+    TARGET,
+    TOKEN,
+    check_disjoint,
+    explode_antonyms,
+    get_non_antonyms,
+    get_tokenizer,
+    shuffle,
+    split_data,
+    tokenize_data,
+)
 from utils import get_gpt_size
 
 
 class Args(main.Args):
-    embedding_size: Literal[
-        "small", "medium", "large", "xl"
-    ] = "medium"  # what size of pretrained GPT to use
+    data_path: str = "antonyms.zip"
+    embedding_size: GPTSize = "medium"  # what size of pretrained GPT to use
     env: str = "GoToLocal"  # env ID for gym
     go_and_face_synonyms: str = None
     negation_types: str = None
@@ -79,22 +99,22 @@ class Trainer(main.Trainer):
         action_space = envs.action_space
         observation_space, *_ = envs.get_attr("original_observation_space")
         missions: List[str]
-        missions, *_ = envs.get_attr("missions")
-        tokenizer = GPT2Tokenizer.from_pretrained(get_gpt_size(args.embedding_size))
-        encoded = [tokenizer.encode(m, return_tensors="pt") for m in missions]
-        encoded = [torch.squeeze(m, 0) for m in encoded]
-        encoded = pad_sequence(encoded, padding_value=tokenizer.eos_token_id).T
+        # missions, *_ = envs.get_attr("missions")
+        # tokenizer = GPT2Tokenizer.from_pretrained(get_gpt_size(args.embedding_size))
+        # encoded = [tokenizer.encode(m, return_tensors="pt") for m in missions]
+        # encoded = [torch.squeeze(m, 0) for m in encoded]
+        # encoded = pad_sequence(encoded, padding_value=tokenizer.eos_token_id).T
         return cls._make_agent(
             action_space=action_space,
             observation_space=observation_space,
-            encoded=encoded,
+            # encoded=encoded,
             args=args,
         )
 
     @classmethod
     def _make_agent(
         cls,
-        encoded: torch.Tensor,
+        # encoded: torch.Tensor,
         action_space: gym.spaces.Discrete,
         observation_space: gym.spaces.Dict,
         args: ArgsType,
@@ -106,7 +126,7 @@ class Trainer(main.Trainer):
             observation_space=observation_space,
             recurrent=cls.recurrent(args),
             second_layer=args.second_layer,
-            encoded=encoded,
+            # encoded=encoded,
         )
 
     @staticmethod
@@ -118,6 +138,8 @@ class Trainer(main.Trainer):
     @classmethod
     def make_env(cls, env, allow_early_resets, render: bool = False, *args, **kwargs):
         def _thunk(
+            data_path: str,
+            embedding_size: str,
             env_id: str,
             go_and_face_synonyms: str,
             negation_colors: str,
@@ -362,20 +384,54 @@ class Trainer(main.Trainer):
                 _env = TimeLimit(_env, max_episode_steps=room_size + 1)
                 missions = [f"{target}" for target in rows]
 
+            elif env_id == "antonyms":
+                with zipfile.ZipFile(data_path) as zip_file:
+                    with zip_file.open("antonyms.csv") as file:
+                        data: pd.DataFrame = pd.read_csv(file)
+
+                data = data[[ANTONYM, LEMMA]].drop_duplicates()
+                data = explode_antonyms(data)
+                tokenizer = get_tokenizer(embedding_size)
+                token_lemmas, token_antonyms = tokenize_data(data, tokenizer)
+                data = pd.DataFrame(
+                    {
+                        (STRING, LEMMA): data[LEMMA],
+                        (STRING, ANTONYM): data[ANTONYM],
+                        (TOKEN, LEMMA): token_lemmas,
+                        (TOKEN, ANTONYM): token_antonyms,
+                    }
+                )
+                data = shuffle(data)
+                is_disjoint = check_disjoint(data[TOKEN], tokenizer.eos_token_id)
+                data = data[is_disjoint]
+                tokens = data[TOKEN].reset_index(drop=True)
+                is_train, is_test = split_data(tokens, n_test=185)
+
+                is_dataset = is_test if test else is_train
+
+                dataset = tokens[is_dataset].reset_index(drop=True)
+                rng = np.random.default_rng(seed=seed)
+                dataset = dataset.assign(
+                    **{NON_ANTONYM: get_non_antonyms(dataset, rng)}
+                )
+                dataset = dataset.apply(lambda x: x.apply(lambda y: y.numpy()))
+                dataset = dataset.assign(**{TARGET: rng.choice(2, size=len(dataset))})
+
+                _env = AntonymsEnv(dataset, rng)
             else:
                 raise RuntimeError(f"{env_id} is not a valid env_id")
 
-            _env = DirectionWrapper(_env)
-            if env_id == "colors":
-                _env = RGBImgObsWithDirectionWrapper(_env)
-            elif env_id != "linear":
-                _env = FullyObsWrapper(_env)
-
-            _env = ActionInObsWrapper(_env)
-            if not (env_id in ("go-to-loc", "go-to-row", "linear") and scaled_reward):
-                _env = ZeroOneRewardWrapper(_env)
-            _env = MissionEnumeratorWrapper(_env, missions=missions)
-            _env = RolloutsWrapper(_env)
+            # _env = DirectionWrapper(_env)
+            # if env_id == "colors":
+            #     _env = RGBImgObsWithDirectionWrapper(_env)
+            # elif env_id != "linear":
+            #     _env = FullyObsWrapper(_env)
+            #
+            # _env = ActionInObsWrapper(_env)
+            # if not (env_id in ("go-to-loc", "go-to-row", "linear") and scaled_reward):
+            #     _env = ZeroOneRewardWrapper(_env)
+            # _env = MissionEnumeratorWrapper(_env, missions=missions)
+            # _env = RolloutsWrapper(_env)
 
             _env = Monitor(_env, allow_early_resets=allow_early_resets)
             if render:

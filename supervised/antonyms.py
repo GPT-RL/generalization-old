@@ -1,21 +1,19 @@
 from __future__ import print_function
 
 import logging
-import os
-import re
-import zipfile
-from pathlib import Path
-from pprint import pprint
-from typing import Literal, Optional, cast, get_args
-
 import numpy as np
+import os
 import pandas as pd
+import re
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import yaml
+import zipfile
 from gql import gql
+from pathlib import Path
+from pprint import pprint
 from run_logger import HasuraLogger
 from tap import Tap
 from torch.nn.utils.rnn import pad_sequence
@@ -23,6 +21,7 @@ from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import Dataset
 from tqdm import tqdm
 from transformers import GPT2Config, GPT2Model, GPT2Tokenizer
+from typing import Literal, Optional, cast, get_args
 
 from spec import spec
 
@@ -64,7 +63,6 @@ class GPTEmbed(nn.Module):
             requires_grad = (train_wpe and "wpe" in name) or (train_ln and "ln" in name)
             p.requires_grad_(requires_grad)
 
-    def forward(self, x, **_):
         return self.gpt.forward(x).last_hidden_state[:, :, -1]
 
 
@@ -83,6 +81,7 @@ class Net(nn.Module):
         )
 
     def forward(self, x):
+        breakpoint()
         embedded = self.gpt(x)
         n_classes = x.size(1) - 1
         lemma, choices = torch.split(embedded, [1, n_classes], dim=1)
