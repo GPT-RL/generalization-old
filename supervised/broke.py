@@ -4,9 +4,10 @@ import logging
 import os
 import re
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from pprint import pprint
-from typing import Literal, Optional, cast, get_args
+from typing import Literal, Optional, Sequence, cast, get_args
 
 import numpy as np
 import pandas as pd
@@ -29,8 +30,23 @@ from spec import spec
 GPTSize = Literal["small", "medium", "large", "xl"]
 
 
+def get_huggingface_size(gpt_size: GPTSize):
+    gpt_size = "" if gpt_size == "small" else f"-{gpt_size}"
+    gpt_size = f"gpt2{gpt_size}"
+    return gpt_size
+
+
+def get_gpt_size(gpt_size: GPTSize) -> int:
+    gpt_size = get_huggingface_size(gpt_size)
+    return GPT2Config.from_pretrained(gpt_size).n_embd
+
+
+def get_tokenizer(gpt_size: GPTSize) -> GPT2Tokenizer:
+    return GPT2Tokenizer.from_pretrained(get_huggingface_size(gpt_size))
+
+
 def build_gpt(gpt_size: GPTSize, randomize_parameters: bool):
-    gpt_size = get_gpt_size(gpt_size)
+    gpt_size = get_huggingface_size(gpt_size)
     return (
         GPT2Model(
             GPT2Config.from_pretrained(
@@ -72,7 +88,7 @@ class Net(nn.Module):
     def __init__(self, embedding_size: GPTSize, hidden_size: int, **kwargs):
         super(Net, self).__init__()
         self.embedding_size = GPT2Config.from_pretrained(
-            get_gpt_size(embedding_size)
+            get_huggingface_size(embedding_size)
         ).n_embd
         self.K = nn.Linear(hidden_size, hidden_size)
         self.Q = nn.Linear(hidden_size, hidden_size)
@@ -83,6 +99,7 @@ class Net(nn.Module):
         )
 
     def forward(self, x):
+        assert len(x.shape) == 3
         embedded = self.gpt(x)
         n_classes = x.size(1) - 1
         lemma, choices = torch.split(embedded, [1, n_classes], dim=1)
@@ -93,19 +110,16 @@ class Net(nn.Module):
         return output
 
 
-def get_gpt_size(gpt_size: GPTSize):
-    gpt_size = "" if gpt_size == "small" else f"-{gpt_size}"
-    gpt_size = f"gpt2{gpt_size}"
-    return gpt_size
-
-
 def shuffle(df: pd.DataFrame, **kwargs):
     return df.sample(frac=1, **kwargs).reset_index(drop=True)
 
 
-ANTONYM = "antonyms"
 LEMMA = "lemma"
 TARGET = "target"
+ANTONYM = "antonyms"
+NON_ANTONYM = "non_antonyms"
+STRING = "string"
+TOKEN = "token"
 
 
 def explode_antonyms(data: pd.DataFrame):
@@ -117,48 +131,83 @@ def explode_antonyms(data: pd.DataFrame):
     return data
 
 
-class Antonyms(Dataset):
-    def __init__(
-        self,
-        data: pd.DataFrame,
-        gpt_size: GPTSize,
-        n_classes: int,
-        seed: int,
-    ):
-        data = shuffle(data, random_state=seed)  # shuffle data
+def tokenize_data(data: pd.DataFrame, tokenizer: GPT2Tokenizer):
+    concatenated = pd.concat([data[LEMMA], data[ANTONYM]])
+    with tqdm(desc="Encoding data", total=len(concatenated)) as bar:
 
-        data = data.rename(columns=dict(antonyms=0))  # correct answer goes to column 0
-        assert n_classes >= 2
-        for i in range(1, n_classes):
-            # classes 1...n_classes contain randomly chosen wrong choices
-            data[i] = shuffle(data[LEMMA], random_state=seed + i)
+        def encode(s: str):
+            bar.update(1)
+            tensor = tokenizer.encode(s, return_tensors="pt")
+            return cast(torch.Tensor, tensor).squeeze(0)
 
-        # permute choices (otherwise correct answer is always 0)
-        input_columns = list(range(n_classes))  # inputs will be columns 0...n_classes
-        N = len(data)
-        ii = np.tile(np.expand_dims(np.arange(N), 1), (1, n_classes))
-        jj = np.tile(np.arange(n_classes), (N, 1))
-        jj = np.random.default_rng(seed).permuted(
-            jj, axis=1
-        )  # shuffle indices along y-axis
-        permuted_inputs = data[input_columns].to_numpy()[
-            ii, jj
-        ]  # shuffle data using indices
-        data[input_columns] = permuted_inputs
-        _, data[TARGET] = (
-            jj == 0
-        ).nonzero()  # identify new targets (where 0-index was shuffled to)
-        self.data = data
+        encoded = list(map(encode, concatenated))
+        padded = pad_sequence(encoded, padding_value=tokenizer.eos_token_id).T
+        n_lemma = len(data[LEMMA])
+        assert 2 * n_lemma == len(padded)
+        token_lemmas = list(padded[:n_lemma])
+        token_antonyms = list(padded[n_lemma:])
+        return token_lemmas, token_antonyms
 
-        tokenizer = GPT2Tokenizer.from_pretrained(get_gpt_size(gpt_size))
 
-        padded = [
-            pad_sequence(list(data[col]), padding_value=tokenizer.eos_token_id)
-            for col in [LEMMA, *input_columns]
-        ]
-        self.inputs = pad_sequence(padded, padding_value=tokenizer.eos_token_id)
-        self.inputs = self.inputs.transpose(0, 2)
-        self.targets = torch.tensor(data[TARGET].to_numpy())
+def isin(a: torch.Tensor, b: torch.Tensor):
+    assert len(a.shape) == 2
+    assert len(b.shape) == 2
+    assert a.size(-1) == b.size(-1)
+    equal = a.unsqueeze(1) == b.unsqueeze(0)
+    equal = cast(torch.Tensor, equal)
+    return equal.all(-1).any(1)
+
+
+def check_disjoint(data: pd.DataFrame, eos: int):
+    lemmas = torch.stack(list(data[LEMMA]))
+    antonyms = torch.stack(list(data[ANTONYM]))
+    non_vocab = antonyms.max() + 1
+    lemmas_ = lemmas * (lemmas == eos) * non_vocab + lemmas * (lemmas != eos)
+    intersecting = lemmas_.unsqueeze(1) == antonyms.unsqueeze(2)
+    intersecting = cast(torch.Tensor, intersecting)
+    intersecting = intersecting.any(2).any(1)
+    disjoint = pd.Series(~intersecting.numpy())
+    return disjoint
+
+
+def split_data(data: pd.DataFrame, n_test: int):
+    lemmas = torch.stack(list(data[LEMMA]))
+    antonyms = torch.stack(list(data[ANTONYM]))
+    vocab = torch.cat([lemmas, antonyms])
+    vocab = torch.unique(vocab, dim=0)
+    test_vocab = vocab[:n_test]
+
+    lemma_in_test = isin(lemmas, test_vocab)
+    antonym_in_test = isin(antonyms, test_vocab)
+    is_train = ~lemma_in_test & ~antonym_in_test
+    is_test = lemma_in_test & antonym_in_test
+    return pd.Series(is_train), pd.Series(is_test)
+
+
+def get_non_antonyms(data: pd.DataFrame, rng: np.random.Generator):
+    indices = torch.arange(len(data))
+    lemmas = torch.stack(list(data[LEMMA]))
+    choices = torch.tensor(rng.uniform(size=len(lemmas)))
+
+    unique_lemmas, unique_indices, counts = torch.unique(
+        lemmas, return_inverse=True, return_counts=True, dim=0
+    )
+    valid_indices = unique_indices.unsqueeze(-1) != unique_indices.unsqueeze(0)
+    valid_indices = cast(torch.Tensor, valid_indices)
+    chosen_indices = choices * (valid_indices.sum(-1) - 1)
+    chosen_indices = chosen_indices.round().long()
+
+    def _get_non_antonyms():
+        for i, (valid, choice) in enumerate(zip(valid_indices, chosen_indices)):
+            yield int((indices[valid])[choice])
+
+    return pd.Series(list(_get_non_antonyms()))
+
+
+@dataclass
+class _Dataset(Dataset):
+    inputs: Sequence[torch.Tensor]
+    targets: Sequence[torch.Tensor]
 
     def __len__(self):
         return len(self.inputs)
@@ -204,7 +253,7 @@ class Args(Tap):
     lr: float = 1.0
     n_classes: int = 3
     n_train: int = 9000
-    n_test: int = 320
+    n_test: int = 2000
     no_cuda: bool = False
     randomize_parameters: bool = False
     save_model: bool = False
@@ -231,29 +280,6 @@ def get_save_path(run_id: Optional[int]):
     )
 
 
-def isin(a: torch.Tensor, b: torch.Tensor):
-    assert len(a.shape) == 2
-    assert len(b.shape) == 2
-    assert a.size(-1) == b.size(-1)
-    equal = a.unsqueeze(1) == b.unsqueeze(0)
-    equal = cast(torch.Tensor, equal)
-    return equal.all(-1).any(1)
-
-
-def split_data(data: pd.DataFrame, n_test: int):
-    lemmas = torch.stack(list(data[LEMMA]))
-    antonyms = torch.stack(list(data[ANTONYM]))
-    vocab = torch.cat([lemmas, antonyms])
-    vocab = torch.unique(vocab, dim=0)
-    test_vocab = vocab[:n_test]
-
-    lemma_in_test = isin(lemmas, test_vocab)
-    antonym_in_test = isin(antonyms, test_vocab)
-    is_train = ~lemma_in_test & ~antonym_in_test
-    is_test = lemma_in_test & antonym_in_test
-    return pd.Series(is_train), pd.Series(is_test)
-
-
 def train(args: Args, logger: HasuraLogger):
     # Training settings
     use_cuda = not args.no_cuda and torch.cuda.is_available()
@@ -269,74 +295,52 @@ def train(args: Args, logger: HasuraLogger):
         train_kwargs.update(cuda_kwargs)
         test_kwargs.update(cuda_kwargs)
 
+    assert args.data_path is not None
+
     with zipfile.ZipFile(args.data_path) as zip_file:
         with zip_file.open("antonyms.csv") as file:
             data: pd.DataFrame = pd.read_csv(file)
 
-    data = shuffle(data, random_state=args.seed)
+    rng = np.random.default_rng()
+    data = data[[ANTONYM, LEMMA]].drop_duplicates()
     data = explode_antonyms(data)
-
-    tokenizer = GPT2Tokenizer.from_pretrained(get_gpt_size(args.embedding_size))
-    columns = [LEMMA, ANTONYM]
-
-    with tqdm(
-        desc="Encoding data", total=sum(len(data[col]) for col in columns)
-    ) as bar:
-
-        def encode(s: str):
-            bar.update(1)
-            return tuple(tokenizer.encode(s))
-
-        for col in columns:
-            data[col] = data[col].apply(encode)
-
-    vocab = set()
-    train_vocab = set()
-    for _, row in data.iterrows():
-        lemma = row[LEMMA]
-        antonyms = row[ANTONYM]
-        vocab |= {lemma, antonyms}
-        if len(train_vocab) < args.n_train:
-            train_vocab |= {lemma}
-        if len(train_vocab) < args.n_train:
-            train_vocab |= {antonyms}
-
-    assert args.n_train + args.n_test <= len(
-        vocab
-    ), f"n_train ({args.n_train}) + n_test ({args.n_test}) should be <= len(vocab) ({len(vocab)})"
-
-    lemma_is_in_train = data[LEMMA].isin(train_vocab)
-    antonym_is_in_train = data[ANTONYM].isin(train_vocab)
-
-    add_to_train_data = lemma_is_in_train & antonym_is_in_train
-    add_to_test_data = ~lemma_is_in_train & ~antonym_is_in_train
-
-    for col in [LEMMA, ANTONYM]:
-        data[col] = data[col].apply(torch.tensor)
-    train_data = data[add_to_train_data].copy()
-    test_data = data[add_to_test_data].copy().iloc[: args.n_test]
-
-    def collect_vocab(df: pd.DataFrame):
-        return set(df[LEMMA]) | set(df[ANTONYM])
-
-    train_vocab = collect_vocab(train_data)
-    test_vocab = collect_vocab(test_data)
-    assert (
-        len(test_vocab) >= args.n_test
-    ), f"Insufficient test data ({len(test_vocab)}). Required {args.n_test}."
-    logging.info(f"Unused rows: {len(data) - len(train_data) - len(test_data)}")
-
-    common = train_vocab & test_vocab
-    assert not common, f"Vocabulary is shared between train and test: {common}"
-
-    kwargs = dict(
-        gpt_size=args.embedding_size,
-        n_classes=args.n_classes,
-        seed=0,
+    tokenizer = get_tokenizer(args.embedding_size)
+    token_lemmas, token_antonyms = tokenize_data(data, tokenizer)
+    data = pd.DataFrame(
+        {
+            (STRING, LEMMA): data[LEMMA],
+            (STRING, ANTONYM): data[ANTONYM],
+            (TOKEN, LEMMA): token_lemmas,
+            (TOKEN, ANTONYM): token_antonyms,
+        }
     )
+    data = shuffle(data)
+    is_disjoint = check_disjoint(data[TOKEN], tokenizer.eos_token_id)
+    data = data[is_disjoint].reset_index(drop=True)
+    is_train, is_test = split_data(data[TOKEN], n_test=args.n_test)
 
-    train_dataset = Antonyms(train_data, **kwargs)
-    test_dataset = Antonyms(test_data, **kwargs)
+    def get_dataset(is_dataset):
+        dataset = data[is_dataset].reset_index(drop=True)
+        targets = torch.tensor(rng.choice(2, size=len(dataset)))
+        tokens = dataset[TOKEN]
+        non_antonym_indices = get_non_antonyms(tokens, rng)
+        lemmas = torch.stack([*tokens[LEMMA]])
+        choices = torch.stack(
+            [
+                torch.stack([*tokens[ANTONYM]]),
+                torch.stack([*tokens[ANTONYM].iloc[non_antonym_indices]]),
+            ],
+            dim=1,
+        )
+
+        ii, _, kk = torch.meshgrid(*map(torch.arange, choices.shape))
+        jj = torch.stack([1 - targets, targets], dim=1).unsqueeze(-1)
+        shuffled = choices[ii, jj, kk]
+        inputs = torch.cat([lemmas.unsqueeze(1), shuffled], dim=1)
+        return inputs, targets
+
+    train_dataset = _Dataset(*get_dataset(is_train))
+    test_dataset = _Dataset(*get_dataset(is_test))
     train_loader = torch.utils.data.DataLoader(train_dataset, **train_kwargs)
     test_loader = torch.utils.data.DataLoader(test_dataset, **test_kwargs)
 
