@@ -103,17 +103,17 @@ def shuffle(df: pd.DataFrame, **kwargs):
     return df.sample(frac=1, **kwargs).reset_index(drop=True)
 
 
-ANTONYMS = "antonyms"
+ANTONYM = "antonyms"
 LEMMA = "lemma"
 TARGET = "target"
 
 
 def explode_antonyms(data: pd.DataFrame):
-    data[ANTONYMS] = data.apply(
+    data[ANTONYM] = data.apply(
         func=lambda x: re.split("[;|]", x.antonyms),
         axis=1,
     )
-    data = data.explode(ANTONYMS)
+    data = data.explode(ANTONYM)
     return data
 
 
@@ -231,6 +231,29 @@ def get_save_path(run_id: Optional[int]):
     )
 
 
+def isin(a: torch.Tensor, b: torch.Tensor):
+    assert len(a.shape) == 2
+    assert len(b.shape) == 2
+    assert a.size(-1) == b.size(-1)
+    equal = a.unsqueeze(1) == b.unsqueeze(0)
+    equal = cast(torch.Tensor, equal)
+    return equal.all(-1).any(1)
+
+
+def split_data(data: pd.DataFrame, n_test: int):
+    lemmas = torch.stack(list(data[LEMMA]))
+    antonyms = torch.stack(list(data[ANTONYM]))
+    vocab = torch.cat([lemmas, antonyms])
+    vocab = torch.unique(vocab, dim=0)
+    test_vocab = vocab[:n_test]
+
+    lemma_in_test = isin(lemmas, test_vocab)
+    antonym_in_test = isin(antonyms, test_vocab)
+    is_train = ~lemma_in_test & ~antonym_in_test
+    is_test = lemma_in_test & antonym_in_test
+    return pd.Series(is_train), pd.Series(is_test)
+
+
 def train(args: Args, logger: HasuraLogger):
     # Training settings
     use_cuda = not args.no_cuda and torch.cuda.is_available()
@@ -254,7 +277,7 @@ def train(args: Args, logger: HasuraLogger):
     data = explode_antonyms(data)
 
     tokenizer = GPT2Tokenizer.from_pretrained(get_gpt_size(args.embedding_size))
-    columns = [LEMMA, ANTONYMS]
+    columns = [LEMMA, ANTONYM]
 
     with tqdm(
         desc="Encoding data", total=sum(len(data[col]) for col in columns)
@@ -267,12 +290,11 @@ def train(args: Args, logger: HasuraLogger):
         for col in columns:
             data[col] = data[col].apply(encode)
 
-
     vocab = set()
     train_vocab = set()
     for _, row in data.iterrows():
         lemma = row[LEMMA]
-        antonyms = row[ANTONYMS]
+        antonyms = row[ANTONYM]
         vocab |= {lemma, antonyms}
         if len(train_vocab) < args.n_train:
             train_vocab |= {lemma}
@@ -284,17 +306,18 @@ def train(args: Args, logger: HasuraLogger):
     ), f"n_train ({args.n_train}) + n_test ({args.n_test}) should be <= len(vocab) ({len(vocab)})"
 
     lemma_is_in_train = data[LEMMA].isin(train_vocab)
-    antonym_is_in_train = data[ANTONYMS].isin(train_vocab)
+    antonym_is_in_train = data[ANTONYM].isin(train_vocab)
+
     add_to_train_data = lemma_is_in_train & antonym_is_in_train
     add_to_test_data = ~lemma_is_in_train & ~antonym_is_in_train
 
-    for col in [LEMMA, ANTONYMS]:
+    for col in [LEMMA, ANTONYM]:
         data[col] = data[col].apply(torch.tensor)
     train_data = data[add_to_train_data].copy()
     test_data = data[add_to_test_data].copy().iloc[: args.n_test]
 
     def collect_vocab(df: pd.DataFrame):
-        return set(df[LEMMA]) | set(df[ANTONYMS])
+        return set(df[LEMMA]) | set(df[ANTONYM])
 
     train_vocab = collect_vocab(train_data)
     test_vocab = collect_vocab(test_data)
