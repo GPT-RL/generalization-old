@@ -267,17 +267,6 @@ def train(args: Args, logger: HasuraLogger):
         for col in columns:
             data[col] = data[col].apply(encode)
 
-    if args.disjoint_only:
-        with tqdm(desc="Checking disjoint", total=len(data)) as bar:
-
-            def is_disjoint(r: pd.Series):
-                bar.update(1)
-                disjoint = set(r[LEMMA]).isdisjoint(set(r[ANTONYMS]))
-                return r.append(pd.Series(dict(disjoint=disjoint)))
-
-            data = data.apply(is_disjoint, axis=1)
-            logging.info(f"Excluding {sum(~data.disjoint)} rows.")
-            data = data[data.disjoint]
 
     vocab = set()
     train_vocab = set()
