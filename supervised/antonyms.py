@@ -284,18 +284,12 @@ def train(args: Args, logger: HasuraLogger):
         for col in columns:
             data[col] = data[col].apply(encode)
 
-    vocab = set()
     train_vocab = set()
     for lemma, antonym in zip(data[LEMMA], data[ANTONYM]):
-        vocab |= {lemma, antonym}
         if len(train_vocab) < args.n_train:
             train_vocab |= {lemma}
         if len(train_vocab) < args.n_train:
             train_vocab |= {antonym}
-
-    assert args.n_train + args.n_test <= len(
-        vocab
-    ), f"n_train ({args.n_train}) + n_test ({args.n_test}) should be <= len(vocab) ({len(vocab)})"
 
     padded = pad_sequence(
         list(map(torch.tensor, [*train_vocab, *data[LEMMA], *data[ANTONYM]])),
