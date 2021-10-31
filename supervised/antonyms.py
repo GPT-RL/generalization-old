@@ -324,19 +324,6 @@ def train(args: Args, logger: HasuraLogger):
     train_data = data[add_to_train_data].copy()
     test_data = data[add_to_test_data].copy()
 
-    def collect_vocab(df: pd.DataFrame):
-        return set(df[LEMMA]) | set(df[ANTONYM])
-
-    train_vocab = collect_vocab(train_data)
-    test_vocab = collect_vocab(test_data)
-    assert (
-        len(test_vocab) >= args.n_test
-    ), f"Insufficient test data ({len(test_vocab)}). Required {args.n_test}."
-    logging.info(f"Unused rows: {len(data) - len(train_data) - len(test_data)}")
-
-    common = train_vocab & test_vocab
-    assert not common, f"Vocabulary is shared between train and test: {common}"
-
     kwargs = dict(
         gpt_size=args.embedding_size,
         n_classes=args.n_classes,
