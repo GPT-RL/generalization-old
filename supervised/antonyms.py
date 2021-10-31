@@ -124,15 +124,14 @@ class Antonyms(Dataset):
         gpt_size: GPTSize,
         seed: int,
     ):
-        data = shuffle(data, random_state=seed)  # shuffle data
-
         data = data.rename(columns=dict(antonyms=0))  # correct answer goes to column 0
-        data[1] = shuffle(data[LEMMA], random_state=seed)
+        lemmas = data[LEMMA].copy().reset_index(drop=True)
+        data = shuffle(data, random_state=seed)  # shuffle data
+        data[1] = lemmas
 
         # permute choices (otherwise correct answer is always 0)
         input_columns = [0, 1]
-        N = len(data)
-        jj, ii = np.meshgrid(np.arange(2), np.arange(N))
+        jj, ii = np.meshgrid(np.arange(2), np.arange(len(data)))
         jj = np.random.default_rng(seed).permuted(
             jj, axis=1
         )  # shuffle indices along y-axis
