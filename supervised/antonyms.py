@@ -305,13 +305,6 @@ def train(args: Args, logger: HasuraLogger):
         ]
     )
 
-    padded = pad_sequence(
-        list(map(torch.tensor, [*train_vocab, *data[LEMMA], *data[ANTONYM]])),
-        padding_value=tokenizer.eos_token_id,
-    ).T
-    train_vocab, lemmas, antonyms = torch.split(
-        padded, [len(train_vocab), len(data), len(data)]
-    )
     lemma_is_in_train = isin(lemmas, train_vocab).numpy()
     antonym_is_in_train = isin(antonyms, train_vocab).numpy()
 
