@@ -284,28 +284,33 @@ def train(args: Args, logger: HasuraLogger):
         for col in columns:
             data[col] = data[col].apply(encode)
 
-    vocab = set()
-    train_vocab = set()
-    for _, row in data.iterrows():
-        lemma = row[LEMMA]
-        antonym = row[ANTONYM]
-        vocab |= {lemma, antonym}
-        if len(train_vocab) < args.n_train:
-            train_vocab |= {lemma}
-        if len(train_vocab) < args.n_train:
-            train_vocab |= {antonym}
-
-    assert args.n_train + args.n_test <= len(
-        vocab
-    ), f"n_train ({args.n_train}) + n_test ({args.n_test}) should be <= len(vocab) ({len(vocab)})"
-
     padded = pad_sequence(
-        list(map(torch.tensor, [*train_vocab, *data[LEMMA], *data[ANTONYM]])),
+        list(map(torch.tensor, [*data[LEMMA], *data[ANTONYM]])),
         padding_value=tokenizer.eos_token_id,
     ).T
-    train_vocab, lemmas, antonyms = torch.split(
-        padded, [len(train_vocab), len(data), len(data)]
+    lemmas, antonyms = torch.split(padded, [len(data), len(data)])
+
+    train_vocab = set()
+    for lemma, antonym in zip(data[LEMMA], data[ANTONYM]):
+        for word in [lemma, antonym]:
+            if len(train_vocab) < args.n_train:
+                train_vocab |= {word}
+
+    vocab = padded.unique(dim=0)
+    in_train_vocab = torch.tensor(
+        [tuple(map(int, x[x != tokenizer.eos_token_id])) in train_vocab for x in vocab]
     )
+    train_vocab = torch.stack(
+        [
+            x
+            for x in vocab
+            if tuple(map(int, x[x != tokenizer.eos_token_id])) in train_vocab
+        ]
+    )
+    _train_vocab = vocab[in_train_vocab]
+    assert torch.all(cast(torch.Tensor, (train_vocab == _train_vocab)))
+    train_vocab = _train_vocab
+
     lemma_is_in_train = isin(lemmas, train_vocab).numpy()
     antonym_is_in_train = isin(antonyms, train_vocab).numpy()
 
