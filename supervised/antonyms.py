@@ -290,12 +290,6 @@ def train(args: Args, logger: HasuraLogger):
     ).T
     lemmas, antonyms = torch.split(padded, [len(data), len(data)])
 
-    train_vocab = set()
-    for lemma, antonym in zip(data[LEMMA], data[ANTONYM]):
-        for word in [lemma, antonym]:
-            if len(train_vocab) < args.n_train:
-                train_vocab |= {word}
-
     vocab = padded.unique(dim=0)
     train_vocab = vocab[torch.randint(len(vocab), size=[args.n_train])]
 
