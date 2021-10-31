@@ -128,15 +128,12 @@ class Antonyms(Dataset):
         data = shuffle(data, random_state=seed)  # shuffle data
 
         data = data.rename(columns=dict(antonyms=0))  # correct answer goes to column 0
-        assert n_classes >= 2
-        # classes 1...n_classes contain randomly chosen wrong choices
         data[1] = shuffle(data[LEMMA], random_state=seed)
 
         # permute choices (otherwise correct answer is always 0)
-        input_columns = list(range(n_classes))  # inputs will be columns 0...n_classes
+        input_columns = [0, 1]
         N = len(data)
-        ii = np.tile(np.expand_dims(np.arange(N), 1), (1, n_classes))
-        jj = np.tile(np.arange(n_classes), (N, 1))
+        jj, ii = np.meshgrid(np.arange(2), np.arange(N))
         jj = np.random.default_rng(seed).permuted(
             jj, axis=1
         )  # shuffle indices along y-axis
