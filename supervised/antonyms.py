@@ -296,6 +296,15 @@ def train(args: Args, logger: HasuraLogger):
             if len(train_vocab) < args.n_train:
                 train_vocab |= {word}
 
+    vocab = padded.unique(dim=0)
+    train_vocab = torch.stack(
+        [
+            x
+            for x in vocab
+            if tuple(map(int, x[x != tokenizer.eos_token_id])) in train_vocab
+        ]
+    )
+
     padded = pad_sequence(
         list(map(torch.tensor, [*train_vocab, *data[LEMMA], *data[ANTONYM]])),
         padding_value=tokenizer.eos_token_id,
