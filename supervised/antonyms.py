@@ -305,8 +305,15 @@ def train(args: Args, logger: HasuraLogger):
         vocab
     ), f"n_train ({args.n_train}) + n_test ({args.n_test}) should be <= len(vocab) ({len(vocab)})"
 
-    lemma_is_in_train = data[LEMMA].isin(train_vocab)
-    antonym_is_in_train = data[ANTONYM].isin(train_vocab)
+    padded = pad_sequence(
+        list(map(torch.tensor, [*train_vocab, *data[LEMMA], *data[ANTONYM]])),
+        padding_value=tokenizer.eos_token_id,
+    ).T
+    train_vocab, lemmas, antonyms = torch.split(
+        padded, [len(train_vocab), len(data), len(data)]
+    )
+    lemma_is_in_train = isin(lemmas, train_vocab).numpy()
+    antonym_is_in_train = isin(antonyms, train_vocab).numpy()
 
     add_to_train_data = lemma_is_in_train & antonym_is_in_train
     add_to_test_data = ~lemma_is_in_train & ~antonym_is_in_train
