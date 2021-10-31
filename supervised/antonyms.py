@@ -286,9 +286,7 @@ def train(args: Args, logger: HasuraLogger):
 
     vocab = set()
     train_vocab = set()
-    for _, row in data.iterrows():
-        lemma = row[LEMMA]
-        antonym = row[ANTONYM]
+    for lemma, antonym in zip(data[LEMMA], data[ANTONYM]):
         vocab |= {lemma, antonym}
         if len(train_vocab) < args.n_train:
             train_vocab |= {lemma}
