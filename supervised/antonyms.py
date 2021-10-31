@@ -312,8 +312,8 @@ def train(args: Args, logger: HasuraLogger):
     add_to_train_data = lemma_is_in_train & antonym_is_in_train
     add_to_test_data = ~lemma_is_in_train & ~antonym_is_in_train
 
-    for col in [LEMMA, ANTONYM]:
-        data[col] = data[col].apply(torch.tensor)
+    data[LEMMA] = lemmas
+    data[ANTONYM] = antonyms
 
     train_data = data[add_to_train_data].copy()
     test_data = data[add_to_test_data].copy()
