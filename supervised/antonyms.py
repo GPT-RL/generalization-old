@@ -129,9 +129,8 @@ class Antonyms(Dataset):
 
         data = data.rename(columns=dict(antonyms=0))  # correct answer goes to column 0
         assert n_classes >= 2
-        for i in range(1, n_classes):
-            # classes 1...n_classes contain randomly chosen wrong choices
-            data[i] = shuffle(data[LEMMA], random_state=seed + i)
+        # classes 1...n_classes contain randomly chosen wrong choices
+        data[1] = shuffle(data[LEMMA], random_state=seed)
 
         # permute choices (otherwise correct answer is always 0)
         input_columns = list(range(n_classes))  # inputs will be columns 0...n_classes
