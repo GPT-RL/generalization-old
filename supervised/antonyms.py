@@ -297,13 +297,7 @@ def train(args: Args, logger: HasuraLogger):
                 train_vocab |= {word}
 
     vocab = padded.unique(dim=0)
-    train_vocab = torch.stack(
-        [
-            x
-            for x in vocab
-            if tuple(map(int, x[x != tokenizer.eos_token_id])) in train_vocab
-        ]
-    )
+    train_vocab = vocab[torch.randint(len(vocab), size=[args.n_train])]
 
     lemma_is_in_train = isin(lemmas, train_vocab).numpy()
     antonym_is_in_train = isin(antonyms, train_vocab).numpy()
