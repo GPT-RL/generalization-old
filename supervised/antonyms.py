@@ -288,12 +288,12 @@ def train(args: Args, logger: HasuraLogger):
     train_vocab = set()
     for _, row in data.iterrows():
         lemma = row[LEMMA]
-        antonyms = row[ANTONYM]
-        vocab |= {lemma, antonyms}
+        antonym = row[ANTONYM]
+        vocab |= {lemma, antonym}
         if len(train_vocab) < args.n_train:
             train_vocab |= {lemma}
         if len(train_vocab) < args.n_train:
-            train_vocab |= {antonyms}
+            train_vocab |= {antonym}
 
     assert args.n_train + args.n_test <= len(
         vocab
