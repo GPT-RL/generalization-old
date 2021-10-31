@@ -103,6 +103,7 @@ def shuffle(df: pd.DataFrame, **kwargs):
     return df.sample(frac=1, **kwargs).reset_index(drop=True)
 
 
+NON_ANTONYM = "non-antonyms"
 ANTONYM = "antonyms"
 LEMMA = "lemma"
 TARGET = "target"
@@ -124,13 +125,12 @@ class Antonyms(Dataset):
         gpt_size: GPTSize,
         seed: int,
     ):
-        data = data.rename(columns=dict(antonyms=0))  # correct answer goes to column 0
         lemmas = data[LEMMA].copy().reset_index(drop=True)
         data = shuffle(data, random_state=seed)  # shuffle data
-        data[1] = lemmas
+        data[NON_ANTONYM] = lemmas
 
         # permute choices (otherwise correct answer is always 0)
-        input_columns = [0, 1]
+        input_columns = [ANTONYM, NON_ANTONYM]
         jj, ii = np.meshgrid(np.arange(2), np.arange(len(data)))
         jj = np.random.default_rng(seed).permuted(
             jj, axis=1
