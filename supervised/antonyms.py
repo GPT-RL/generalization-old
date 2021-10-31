@@ -284,6 +284,12 @@ def train(args: Args, logger: HasuraLogger):
         for col in columns:
             data[col] = data[col].apply(encode)
 
+    padded = pad_sequence(
+        list(map(torch.tensor, [*data[LEMMA], *data[ANTONYM]])),
+        padding_value=tokenizer.eos_token_id,
+    ).T
+    lemmas, antonyms = torch.split(padded, [len(data), len(data)])
+
     train_vocab = set()
     for lemma, antonym in zip(data[LEMMA], data[ANTONYM]):
         for word in [lemma, antonym]:
