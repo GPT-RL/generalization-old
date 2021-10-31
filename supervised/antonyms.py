@@ -320,8 +320,9 @@ def train(args: Args, logger: HasuraLogger):
 
     for col in [LEMMA, ANTONYM]:
         data[col] = data[col].apply(torch.tensor)
+
     train_data = data[add_to_train_data].copy()
-    test_data = data[add_to_test_data].copy().iloc[: args.n_test]
+    test_data = data[add_to_test_data].copy()
 
     def collect_vocab(df: pd.DataFrame):
         return set(df[LEMMA]) | set(df[ANTONYM])
