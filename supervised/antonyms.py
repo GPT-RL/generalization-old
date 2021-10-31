@@ -122,7 +122,6 @@ class Antonyms(Dataset):
         self,
         data: pd.DataFrame,
         gpt_size: GPTSize,
-        n_classes: int,
         seed: int,
     ):
         data = shuffle(data, random_state=seed)  # shuffle data
@@ -320,11 +319,7 @@ def train(args: Args, logger: HasuraLogger):
     train_data = data[add_to_train_data].copy()
     test_data = data[add_to_test_data].copy()
 
-    kwargs = dict(
-        gpt_size=args.embedding_size,
-        n_classes=args.n_classes,
-        seed=0,
-    )
+    kwargs = dict(gpt_size=args.embedding_size, seed=0)
 
     train_dataset = Antonyms(train_data, **kwargs)
     test_dataset = Antonyms(test_data, **kwargs)
