@@ -146,7 +146,7 @@ class Antonyms(Dataset):
             [torch.stack(list(data[col])) for col in [LEMMA, *input_columns]], dim=1
         )
         self.inputs = inputs
-        self.targets = torch.tensor(data[TARGET].to_numpy())
+        self.targets = torch.tensor(jj[:, 0])
 
     def __len__(self):
         return len(self.inputs)
