@@ -1,4 +1,5 @@
-from typing import Literal
+from dataclasses import dataclass
+from typing import Callable, Literal, get_args
 
 import torch
 import torch.nn as nn
@@ -25,14 +26,8 @@ class Categorical(nn.Module):
 
 class Agent(agent.Agent):
     def __init__(self, obs_shape, action_space, architecture: Architecture, **kwargs):
-        if architecture == BASELINE:
-            raise NotImplementedError()
-        super().__init__(
-            obs_shape,
-            action_space,
-            randomize_parameters=architecture == RANDOMIZED,
-            **kwargs
-        )
+        assert architecture in get_args(Architecture)
+        super().__init__(obs_shape, action_space, architecture=architecture, **kwargs)
         self.dist = Categorical()
 
     def build_base(self, obs_shape, **kwargs):
@@ -78,27 +73,59 @@ class GPTEmbed(nn.Module):
         return self.gpt.forward(x.long()).last_hidden_state[:, :, -1]
 
 
+class BaselineEmbed(nn.Module):
+    def __init__(self, vocab_size: int, hidden_size: int):
+        super().__init__()
+        self.embed = nn.EmbeddingBag(
+            num_embeddings=vocab_size, embedding_dim=hidden_size
+        )
+
+    def forward(self, x: torch.Tensor):
+        reshape = x.long().reshape(-1, x.size(-1))
+        embedded = self.embed(reshape)
+        return embedded.reshape(x.size(0), x.size(1), -1)
+
+
+class Lambda(nn.Module):
+    def f(self, f: Callable[[torch.Tensor], torch.Tensor]):
+        self.f = f
+
+    def forward(self, x):
+        return self.f(x)
+
+
 class Base(NNBase):
-    def __init__(self, embedding_size: GPTSize, hidden_size: int, **kwargs):
+    def __init__(
+        self,
+        embedding_size: GPTSize,
+        hidden_size: int,
+        architecture: Architecture,
+        **kwargs
+    ):
         super().__init__(
             recurrent=False,
             recurrent_input_size=hidden_size,
             hidden_size=hidden_size,
         )
-        self.embedding_size = GPT2Config.from_pretrained(
-            get_gpt_size(embedding_size)
-        ).n_embd
+        config = GPT2Config.from_pretrained(get_gpt_size(embedding_size))
         self.K = nn.Linear(hidden_size, hidden_size)
         self.Q = nn.Linear(hidden_size, hidden_size)
-        self.emb = nn.Sequential(
-            GPTEmbed(embedding_size=embedding_size, **kwargs),
-            nn.Linear(self.embedding_size, hidden_size),
-            nn.ReLU(),
+        self.emb = (
+            BaselineEmbed(vocab_size=config.vocab_size, hidden_size=hidden_size)
+            if architecture == BASELINE
+            else nn.Sequential(
+                GPTEmbed(
+                    embedding_size=embedding_size,
+                    randomize_parameters=architecture == RANDOMIZED,
+                    **kwargs
+                ),
+                nn.Linear(config.n_embd, hidden_size),
+            )
         )
         self.critic_linear = nn.Linear(2 * hidden_size, 1)
 
     def forward(self, inputs, rnn_hxs, masks):
-        embedded = self.emb(inputs)
+        embedded = torch.relu(self.emb(inputs))
         n_classes = inputs.size(1) - 1
         lemma, choices = torch.split(embedded, [1, n_classes], dim=1)
         lemma = self.K(lemma)
