@@ -122,7 +122,6 @@ class Antonyms(Dataset):
     def __init__(
         self,
         data: pd.DataFrame,
-        gpt_size: GPTSize,
         seed: int,
     ):
         lemmas = data[LEMMA].copy().reset_index(drop=True)
@@ -142,17 +141,7 @@ class Antonyms(Dataset):
         _, data[TARGET] = (
             jj == 0
         ).nonzero()  # identify new targets (where 0-index was shuffled to)
-        self.data = data
 
-        tokenizer = GPT2Tokenizer.from_pretrained(get_gpt_size(gpt_size))
-
-        padded = [
-            pad_sequence(list(data[col]), padding_value=tokenizer.eos_token_id)
-            for col in [LEMMA, *input_columns]
-        ]
-
-        inputs = pad_sequence(padded, padding_value=tokenizer.eos_token_id)
-        self.inputs = inputs.transpose(0, 2)
         inputs = torch.stack(
             [torch.stack(list(data[col])) for col in [LEMMA, *input_columns]], dim=1
         )
@@ -310,7 +299,7 @@ def train(args: Args, logger: HasuraLogger):
     train_data = data[add_to_train_data].copy()
     test_data = data[add_to_test_data].copy()
 
-    kwargs = dict(gpt_size=args.embedding_size, seed=args.seed)
+    kwargs = dict(seed=args.seed)
 
     train_dataset = Antonyms(train_data, **kwargs)
     test_dataset = Antonyms(test_data, **kwargs)
