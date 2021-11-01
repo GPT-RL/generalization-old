@@ -118,32 +118,36 @@ def explode_antonyms(data: pd.DataFrame):
     return data
 
 
+def get_inputs_and_targets(data, seed):
+    lemmas = data[LEMMA].copy().reset_index(drop=True)
+    data = shuffle(data, random_state=seed)  # shuffle data
+    data[NON_ANTONYM] = lemmas
+    # permute choices (otherwise correct answer is always 0)
+    input_columns = [ANTONYM, NON_ANTONYM]
+    jj, ii = np.meshgrid(np.arange(2), np.arange(len(data)))
+    jj = np.random.default_rng(seed).permuted(
+        jj, axis=1
+    )  # shuffle indices along y-axis
+    permuted_inputs = data[input_columns].to_numpy()[
+        ii, jj
+    ]  # shuffle data using indices
+    data[input_columns] = permuted_inputs
+    inputs = torch.stack(
+        [torch.stack(list(data[col])) for col in [LEMMA, *input_columns]], dim=1
+    )
+    targets = torch.tensor(jj[:, 0])
+    return inputs, targets
+
+
 class Antonyms(Dataset):
     def __init__(
         self,
         data: pd.DataFrame,
         seed: int,
     ):
-        lemmas = data[LEMMA].copy().reset_index(drop=True)
-        data = shuffle(data, random_state=seed)  # shuffle data
-        data[NON_ANTONYM] = lemmas
-
-        # permute choices (otherwise correct answer is always 0)
-        input_columns = [ANTONYM, NON_ANTONYM]
-        jj, ii = np.meshgrid(np.arange(2), np.arange(len(data)))
-        jj = np.random.default_rng(seed).permuted(
-            jj, axis=1
-        )  # shuffle indices along y-axis
-        permuted_inputs = data[input_columns].to_numpy()[
-            ii, jj
-        ]  # shuffle data using indices
-        data[input_columns] = permuted_inputs
-
-        inputs = torch.stack(
-            [torch.stack(list(data[col])) for col in [LEMMA, *input_columns]], dim=1
-        )
+        inputs, targets = get_inputs_and_targets(data, seed)
         self.inputs = inputs
-        self.targets = torch.tensor(jj[:, 0])
+        self.targets = targets
 
     def __len__(self):
         return len(self.inputs)
