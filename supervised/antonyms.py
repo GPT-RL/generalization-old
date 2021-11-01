@@ -147,6 +147,15 @@ def explode_antonyms(data: pd.DataFrame):
     return data
 
 
+def check_disjoint(lemmas: torch.Tensor, antonyms: torch.Tensor, eos: int):
+    non_vocab = antonyms.max() + 1
+    lemmas_ = lemmas * (lemmas == eos) * non_vocab + lemmas * (lemmas != eos)
+    intersecting = lemmas_.unsqueeze(1) == antonyms.unsqueeze(2)
+    intersecting = cast(torch.Tensor, intersecting)
+    intersecting = intersecting.any(2).any(1)
+    return ~intersecting
+
+
 def get_inputs_and_targets(data, seed):
     antonym = data[ANTONYM].copy().reset_index(drop=True)
     data = shuffle(data, random_state=seed)  # shuffle data
@@ -293,6 +302,7 @@ def train(args: Args, logger: HasuraLogger):
 
     data = shuffle(data, random_state=args.seed)
     data = explode_antonyms(data)
+    data = data.reset_index(drop=True)
 
     tokenizer = GPT2Tokenizer.from_pretrained(get_gpt_size(args.embedding_size))
     columns = [LEMMA, ANTONYM]
@@ -313,6 +323,11 @@ def train(args: Args, logger: HasuraLogger):
         padding_value=tokenizer.eos_token_id,
     ).T
     lemmas, antonyms = torch.split(padded, [len(data), len(data)])
+
+    is_disjoint = check_disjoint(lemmas, antonyms, tokenizer.eos_token_id)
+    lemmas = lemmas[is_disjoint]
+    antonyms = antonyms[is_disjoint]
+    data = data[pd.Series(is_disjoint.numpy())].reset_index(drop=True)
 
     vocab = padded.unique(dim=0)
     test_vocab = vocab[torch.randperm(len(vocab))][args.n_train :]
