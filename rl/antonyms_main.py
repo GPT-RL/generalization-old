@@ -1,20 +1,20 @@
 import functools
 import re
 import zipfile
-from typing import List, Literal, cast
+from typing import cast
 
-import gym
 import numpy as np
 import pandas as pd
 import torch
+from stable_baselines3.common.monitor import Monitor
 from torch.nn.utils.rnn import pad_sequence
 from tqdm import tqdm
 from transformers import GPT2Tokenizer
 
 import main
-from antonyms.agent import Agent, GPTSize, Architecture, PRETRAINED
-from envs import VecPyTorch
+from antonyms.agent import Agent, Architecture, GPTSize, PRETRAINED
 from antonyms.env import Env
+from envs import VecPyTorch
 from utils import get_gpt_size
 
 
@@ -173,9 +173,11 @@ class Trainer(main.Trainer):
             inputs: torch.Tensor,
             seed: int,
             targets: torch.Tensor,
+            allow_early_resets: bool,
             **_,
         ):
-            return Env(inputs=inputs, targets=targets, seed=seed)
+            env = Env(inputs=inputs, targets=targets, seed=seed)
+            return Monitor(env, allow_early_resets=allow_early_resets)
 
         return functools.partial(_thunk, **kwargs)
 
