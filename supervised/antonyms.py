@@ -148,9 +148,9 @@ def explode_antonyms(data: pd.DataFrame):
 
 
 def get_inputs_and_targets(data, seed):
-    lemmas = data[LEMMA].copy().reset_index(drop=True)
+    antonym = data[ANTONYM].copy().reset_index(drop=True)
     data = shuffle(data, random_state=seed)  # shuffle data
-    data[NON_ANTONYM] = lemmas
+    data[NON_ANTONYM] = antonym
     # permute choices (otherwise correct answer is always 0)
     input_columns = [ANTONYM, NON_ANTONYM]
     jj, ii = np.meshgrid(np.arange(2), np.arange(len(data)))
