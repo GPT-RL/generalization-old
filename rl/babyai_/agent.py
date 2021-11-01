@@ -10,7 +10,7 @@ from transformers import GPT2Config
 
 import agent
 from agent import NNBase
-from babyai_env import Spaces
+from env import Spaces
 from utils import get_gpt_size, init
 
 

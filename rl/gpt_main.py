@@ -4,8 +4,8 @@ from typing import cast
 import gym
 import torch
 
-import babyai_main
-from gpt_agent import Agent, GPTEmbed
+from rl import babyai_main
+from rl.babyai_.gpt_agent import Agent, GPTEmbed
 
 
 class Args(babyai_main.Args):

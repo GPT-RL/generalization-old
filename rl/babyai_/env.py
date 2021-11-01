@@ -18,19 +18,6 @@ from babyai.levels.verifier import (
     PickupInstr,
 )
 from colors import color as ansi_color
-from gym.spaces import Box, Dict, Discrete, Tuple
-from gym_minigrid.minigrid import (
-    COLORS,
-    MiniGridEnv,
-    OBJECT_TO_IDX,
-    WorldObj,
-)
-from gym_minigrid.window import Window
-from gym_minigrid.wrappers import (
-    ImgObsWrapper,
-    RGBImgObsWrapper,
-)
-
 from descs import (
     CardinalDirection,
     CornerDesc,
@@ -42,6 +29,18 @@ from descs import (
     RowDesc,
     TYPES,
     WallDesc,
+)
+from gym.spaces import Box, Dict, Discrete, Tuple
+from gym_minigrid.minigrid import (
+    COLORS,
+    MiniGridEnv,
+    OBJECT_TO_IDX,
+    WorldObj,
+)
+from gym_minigrid.window import Window
+from gym_minigrid.wrappers import (
+    ImgObsWrapper,
+    RGBImgObsWrapper,
 )
 from instrs import (
     FaceInstr,
@@ -1453,7 +1452,7 @@ def main(args: "Args"):
 
 
 if __name__ == "__main__":
-    import babyai_main
+    from rl import babyai_main
 
     class Args(babyai_main.Args):
         tile_size: int = 32

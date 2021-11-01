@@ -25,9 +25,9 @@ from gym_minigrid.window import Window
 from tap import Tap
 from transformers import GPT2Tokenizer
 
-from babyai_agent import get_size
-from babyai_env import Spaces
-from babyai_main import Trainer
+from rl.babyai_.agent import get_size
+from rl.babyai_.env import Spaces
+from rl.babyai_main import Trainer
 from utils import get_gpt_size
 
 INDEX = 0

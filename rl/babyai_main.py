@@ -10,8 +10,8 @@ from torch.nn.utils.rnn import pad_sequence
 from transformers import GPT2Tokenizer
 
 import main
-from babyai_agent import Agent
-from babyai_env import (
+from agent import Agent
+from babyai_.env import (
     ActionInObsWrapper,
     DirectionWrapper,
     DirectionsEnv,
