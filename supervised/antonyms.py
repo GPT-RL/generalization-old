@@ -27,6 +27,11 @@ from transformers import GPT2Config, GPT2Model, GPT2Tokenizer
 from spec import spec
 
 GPTSize = Literal["small", "medium", "large", "xl"]
+PRETRAINED = "pretrained"
+RANDOMIZED = "randomized"
+BASELINE = "baseline"
+# noinspection PyTypeHints
+Architecture = Literal[PRETRAINED, RANDOMIZED, BASELINE]
 
 
 def build_gpt(gpt_size: GPTSize, randomize_parameters: bool):
@@ -50,6 +55,19 @@ def build_gpt(gpt_size: GPTSize, randomize_parameters: bool):
     )
 
 
+class BaselineEmbed(nn.Module):
+    def __init__(self, vocab_size: int, hidden_size: int):
+        super().__init__()
+        self.embed = nn.EmbeddingBag(
+            num_embeddings=vocab_size, embedding_dim=hidden_size
+        )
+
+    def forward(self, x: torch.Tensor):
+        reshape = x.long().reshape(-1, x.size(-1))
+        embedded = self.embed(reshape)
+        return embedded.reshape(x.size(0), x.size(1), -1)
+
+
 class GPTEmbed(nn.Module):
     def __init__(
         self,
@@ -69,21 +87,32 @@ class GPTEmbed(nn.Module):
 
 
 class Net(nn.Module):
-    def __init__(self, embedding_size: GPTSize, hidden_size: int, **kwargs):
+    def __init__(
+        self,
+        embedding_size: GPTSize,
+        architecture: Architecture,
+        hidden_size: int,
+        **kwargs,
+    ):
         super(Net, self).__init__()
-        self.embedding_size = GPT2Config.from_pretrained(
-            get_gpt_size(embedding_size)
-        ).n_embd
+        config = GPT2Config.from_pretrained(get_gpt_size(embedding_size))
         self.K = nn.Linear(hidden_size, hidden_size)
         self.Q = nn.Linear(hidden_size, hidden_size)
-        self.gpt = nn.Sequential(
-            GPTEmbed(embedding_size=embedding_size, **kwargs),
-            nn.Linear(self.embedding_size, hidden_size),
-            nn.ReLU(),
+        self.emb = (
+            BaselineEmbed(vocab_size=config.vocab_size, hidden_size=hidden_size)
+            if architecture == BASELINE
+            else nn.Sequential(
+                GPTEmbed(
+                    embedding_size=embedding_size,
+                    randomize_parameters=architecture == RANDOMIZED,
+                    **kwargs,
+                ),
+                nn.Linear(config.n_embd, hidden_size),
+            )
         )
 
     def forward(self, x):
-        embedded = self.gpt(x)
+        embedded = self.emb(x)
         n_classes = x.size(1) - 1
         lemma, choices = torch.split(embedded, [1, n_classes], dim=1)
         lemma = self.K(lemma)
@@ -176,6 +205,7 @@ def configure_logger_args(args: Tap):
 
 
 class Args(Tap):
+    architecture: Architecture = PRETRAINED
     batch_size: int = 32
     config: Optional[str] = None  # If given, yaml config from which to load params
     data_path: str = "antonyms.zip"
@@ -195,7 +225,6 @@ class Args(Tap):
     n_train: int = 9000
     n_test: int = 320
     no_cuda: bool = False
-    randomize_parameters: bool = False
     save_model: bool = False
     seed: int = 1
     test_batch_size: int = 1000
@@ -306,9 +335,9 @@ def train(args: Args, logger: HasuraLogger):
     test_loader = torch.utils.data.DataLoader(test_dataset, **test_kwargs)
 
     model = Net(
+        architecture=args.architecture,
         embedding_size=args.embedding_size,
         hidden_size=args.hidden_size,
-        randomize_parameters=args.randomize_parameters,
         train_wpe=args.train_wpe,
         train_ln=args.train_ln,
     ).to(device)
