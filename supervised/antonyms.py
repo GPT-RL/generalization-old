@@ -314,7 +314,7 @@ def train(args: Args, logger: HasuraLogger):
     train_data = data[add_to_train_data].copy()
     test_data = data[add_to_test_data].copy()
 
-    kwargs = dict(gpt_size=args.embedding_size, seed=args.seed)
+    kwargs = dict(gpt_size=args.embedding_size, seed=args.seed - 1)
 
     train_dataset = Antonyms(train_data, **kwargs)
     test_dataset = Antonyms(test_data, **kwargs)
