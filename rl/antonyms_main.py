@@ -54,6 +54,15 @@ def explode_antonyms(data: pd.DataFrame):
     return data
 
 
+def check_disjoint(lemmas: torch.Tensor, antonyms: torch.Tensor, eos: int):
+    non_vocab = antonyms.max() + 1
+    lemmas_ = lemmas * (lemmas == eos) * non_vocab + lemmas * (lemmas != eos)
+    intersecting = lemmas_.unsqueeze(1) == antonyms.unsqueeze(2)
+    intersecting = cast(torch.Tensor, intersecting)
+    intersecting = intersecting.any(2).any(1)
+    return ~intersecting
+
+
 def isin(a: torch.Tensor, b: torch.Tensor):
     assert len(a.shape) == 2
     assert len(b.shape) == 2
@@ -64,9 +73,9 @@ def isin(a: torch.Tensor, b: torch.Tensor):
 
 
 def get_inputs_and_targets(data: pd.DataFrame, seed: int):
-    lemmas = data[LEMMA].copy().reset_index(drop=True)
+    antonym = data[ANTONYM].copy().reset_index(drop=True)
     data = shuffle(data, random_state=seed)  # shuffle data
-    data[NON_ANTONYM] = lemmas
+    data[NON_ANTONYM] = antonym
     # permute choices (otherwise correct answer is always 0)
     input_columns = [ANTONYM, NON_ANTONYM]
     jj, ii = np.meshgrid(np.arange(2), np.arange(len(data)))
@@ -124,6 +133,7 @@ class Trainer(main.Trainer):
 
         data = shuffle(data, random_state=seed)
         data = explode_antonyms(data)
+        data = data.reset_index(drop=True)
 
         tokenizer = GPT2Tokenizer.from_pretrained(get_gpt_size(embedding_size))
         columns = [LEMMA, ANTONYM]
@@ -145,14 +155,19 @@ class Trainer(main.Trainer):
         ).T
         lemmas, antonyms = torch.split(padded, [len(data), len(data)])
 
+        is_disjoint = check_disjoint(lemmas, antonyms, tokenizer.eos_token_id)
+        lemmas = lemmas[is_disjoint]
+        antonyms = antonyms[is_disjoint]
+        data = data[pd.Series(is_disjoint.numpy())].reset_index(drop=True)
+
         vocab = padded.unique(dim=0)
-        train_vocab = vocab[torch.randperm(len(vocab))][:n_train]
+        test_vocab = vocab[torch.randperm(len(vocab))][n_train:]
 
-        lemma_is_in_train = isin(lemmas, train_vocab).numpy()
-        antonym_is_in_train = isin(antonyms, train_vocab).numpy()
+        lemma_is_in_test = isin(lemmas, test_vocab).numpy()
+        antonym_is_in_test = isin(antonyms, test_vocab).numpy()
 
-        add_to_train_data = lemma_is_in_train & antonym_is_in_train
-        add_to_test_data = ~lemma_is_in_train & ~antonym_is_in_train
+        add_to_test_data = lemma_is_in_test & antonym_is_in_test
+        add_to_train_data = ~lemma_is_in_test & ~antonym_is_in_test
 
         data[LEMMA] = lemmas
         data[ANTONYM] = antonyms
