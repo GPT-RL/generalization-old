@@ -138,9 +138,6 @@ class Antonyms(Dataset):
             ii, jj
         ]  # shuffle data using indices
         data[input_columns] = permuted_inputs
-        _, data[TARGET] = (
-            jj == 0
-        ).nonzero()  # identify new targets (where 0-index was shuffled to)
 
         inputs = torch.stack(
             [torch.stack(list(data[col])) for col in [LEMMA, *input_columns]], dim=1
