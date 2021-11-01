@@ -296,6 +296,7 @@ def train(args: Args, logger: HasuraLogger):
         [tuple(map(int, x[x != tokenizer.eos_token_id])) in train_vocab for x in vocab]
     )
     train_vocab = vocab[in_train_vocab]
+    train_vocab = vocab[torch.randperm(len(vocab))][: args.n_train]
 
     lemma_is_in_train = isin(lemmas, train_vocab).numpy()
     antonym_is_in_train = isin(antonyms, train_vocab).numpy()
@@ -309,9 +310,8 @@ def train(args: Args, logger: HasuraLogger):
     train_data = data[add_to_train_data].copy()
     test_data = data[add_to_test_data].copy()
 
-    seed = args.seed - 1
-    train_dataset = Antonyms(train_data, seed=seed)
-    test_dataset = Antonyms(test_data, seed=seed)
+    train_dataset = Antonyms(train_data, seed=args.seed)
+    test_dataset = Antonyms(test_data, seed=args.seed)
     train_loader = torch.utils.data.DataLoader(train_dataset, **train_kwargs)
     test_loader = torch.utils.data.DataLoader(test_dataset, **test_kwargs)
 
