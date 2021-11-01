@@ -147,6 +147,8 @@ class Antonyms(Dataset):
         )
         self.inputs = inputs
         self.targets = torch.tensor(data[TARGET].to_numpy())
+        targets = torch.tensor(jj[:, 0])
+        assert torch.all(cast(torch.Tensor, targets == self.targets))
 
     def __len__(self):
         return len(self.inputs)
