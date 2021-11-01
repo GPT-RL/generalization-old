@@ -300,16 +300,7 @@ def train(args: Args, logger: HasuraLogger):
     in_train_vocab = torch.tensor(
         [tuple(map(int, x[x != tokenizer.eos_token_id])) in train_vocab for x in vocab]
     )
-    train_vocab = torch.stack(
-        [
-            x
-            for x in vocab
-            if tuple(map(int, x[x != tokenizer.eos_token_id])) in train_vocab
-        ]
-    )
-    _train_vocab = vocab[in_train_vocab]
-    assert torch.all(cast(torch.Tensor, (train_vocab == _train_vocab)))
-    train_vocab = _train_vocab
+    train_vocab = vocab[in_train_vocab]
 
     lemma_is_in_train = isin(lemmas, train_vocab).numpy()
     antonym_is_in_train = isin(antonyms, train_vocab).numpy()
