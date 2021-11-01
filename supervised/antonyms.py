@@ -150,8 +150,13 @@ class Antonyms(Dataset):
             pad_sequence(list(data[col]), padding_value=tokenizer.eos_token_id)
             for col in [LEMMA, *input_columns]
         ]
-        self.inputs = pad_sequence(padded, padding_value=tokenizer.eos_token_id)
-        self.inputs = self.inputs.transpose(0, 2)
+
+        inputs = pad_sequence(padded, padding_value=tokenizer.eos_token_id)
+        self.inputs = inputs.transpose(0, 2)
+        inputs = torch.stack(
+            [torch.stack(list(data[col])) for col in [LEMMA, *input_columns]], dim=1
+        )
+        assert torch.all(inputs == self.inputs)
         self.targets = torch.tensor(data[TARGET].to_numpy())
 
     def __len__(self):
