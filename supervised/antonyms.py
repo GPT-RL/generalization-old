@@ -315,13 +315,13 @@ def train(args: Args, logger: HasuraLogger):
     lemmas, antonyms = torch.split(padded, [len(data), len(data)])
 
     vocab = padded.unique(dim=0)
-    train_vocab = vocab[torch.randperm(len(vocab))][: args.n_train]
+    test_vocab = vocab[torch.randperm(len(vocab))][args.n_train :]
 
-    lemma_is_in_train = isin(lemmas, train_vocab).numpy()
-    antonym_is_in_train = isin(antonyms, train_vocab).numpy()
+    lemma_is_in_test = isin(lemmas, test_vocab).numpy()
+    antonym_is_in_test = isin(antonyms, test_vocab).numpy()
 
-    add_to_train_data = lemma_is_in_train & antonym_is_in_train
-    add_to_test_data = ~lemma_is_in_train & ~antonym_is_in_train
+    add_to_test_data = lemma_is_in_test & antonym_is_in_test
+    add_to_train_data = ~lemma_is_in_test & ~antonym_is_in_test
 
     data[LEMMA] = lemmas
     data[ANTONYM] = antonyms
