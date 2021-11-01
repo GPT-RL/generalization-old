@@ -309,10 +309,9 @@ def train(args: Args, logger: HasuraLogger):
     train_data = data[add_to_train_data].copy()
     test_data = data[add_to_test_data].copy()
 
-    kwargs = dict(seed=args.seed - 1)
-
-    train_dataset = Antonyms(train_data, **kwargs)
-    test_dataset = Antonyms(test_data, **kwargs)
+    seed = args.seed - 1
+    train_dataset = Antonyms(train_data, seed=seed)
+    test_dataset = Antonyms(test_data, seed=seed)
     train_loader = torch.utils.data.DataLoader(train_dataset, **train_kwargs)
     test_loader = torch.utils.data.DataLoader(test_dataset, **test_kwargs)
 
