@@ -16,6 +16,7 @@ class Args(main.Args):
     data_path: str = "antonyms.pkl"
     embedding_size: GPTSize = "medium"  # what size of pretrained GPT to use
     n_train: int = 4000
+    n_layers: int = 0
     train_ln: bool = False
     train_wpe: bool = False
 
@@ -43,6 +44,7 @@ class Trainer(main.Trainer):
             train_ln=args.train_ln,
             train_wpe=args.train_wpe,
             data_path=args.data_path,
+            n_layers=args.n_layers,
         )
 
     @staticmethod

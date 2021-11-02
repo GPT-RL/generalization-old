@@ -125,6 +125,7 @@ class Base(NNBase):
         embedding_size: GPTSize,
         hidden_size: int,
         architecture: Architecture,
+        n_layers: int,
         **kwargs
     ):
         super().__init__(
@@ -135,17 +136,27 @@ class Base(NNBase):
         config = GPT2Config.from_pretrained(get_gpt_size(embedding_size))
         self.K = nn.Linear(hidden_size, hidden_size)
         self.Q = nn.Linear(hidden_size, hidden_size)
-        self.emb = (
+        first_layer = (
             BaselineEmbed(vocab_size=config.vocab_size, hidden_size=hidden_size)
             if architecture == BASELINE
             else nn.Sequential(
                 GPTEmbed(
                     embedding_size=embedding_size,
                     randomize_parameters=architecture == RANDOMIZED,
-                    **kwargs
+                    **kwargs,
                 ),
                 nn.Linear(config.n_embd, hidden_size),
             )
+        )
+        self.emb = nn.Sequential(
+            first_layer,
+            *[
+                nn.Sequential(
+                    nn.ReLU(),
+                    nn.Linear(hidden_size, hidden_size),
+                )
+                for _ in range(n_layers)
+            ],
         )
         self.critic_linear = nn.Linear(2 * hidden_size, 1)
 
