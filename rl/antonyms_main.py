@@ -20,9 +20,9 @@ from utils import get_gpt_size
 
 class Args(main.Args):
     architecture: Architecture = PRETRAINED
-    data_path: str = "antonyms.zip"
+    data_path: str = "antonyms.pkl"
     embedding_size: GPTSize = "medium"  # what size of pretrained GPT to use
-    n_train: int = 9000
+    n_train: int = 4000
     train_ln: bool = False
     train_wpe: bool = False
 
@@ -43,33 +43,6 @@ TARGET = "target"
 
 def shuffle(df: pd.DataFrame, **kwargs):
     return df.sample(frac=1, **kwargs).reset_index(drop=True)
-
-
-def explode_antonyms(data: pd.DataFrame):
-    data[ANTONYM] = data.apply(
-        func=lambda x: re.split("[;|]", x.antonyms),
-        axis=1,
-    )
-    data = data.explode(ANTONYM)
-    return data
-
-
-def check_disjoint(lemmas: torch.Tensor, antonyms: torch.Tensor, eos: int):
-    non_vocab = antonyms.max() + 1
-    lemmas_ = lemmas * (lemmas == eos) * non_vocab + lemmas * (lemmas != eos)
-    intersecting = lemmas_.unsqueeze(1) == antonyms.unsqueeze(2)
-    intersecting = cast(torch.Tensor, intersecting)
-    intersecting = intersecting.any(2).any(1)
-    return ~intersecting
-
-
-def isin(a: torch.Tensor, b: torch.Tensor):
-    assert len(a.shape) == 2
-    assert len(b.shape) == 2
-    assert a.size(-1) == b.size(-1)
-    equal = a.unsqueeze(1) == b.unsqueeze(0)
-    equal = cast(torch.Tensor, equal)
-    return equal.all(-1).any(1)
 
 
 def get_inputs_and_targets(data: pd.DataFrame, seed: int):
@@ -93,47 +66,6 @@ def get_inputs_and_targets(data: pd.DataFrame, seed: int):
     )
     targets = jj[:, 0]
     return inputs, targets
-
-
-def get_datasets(data_path: str, seed: int, embedding_size: GPTSize, n_train: int):
-    with zipfile.ZipFile(data_path) as zip_file:
-        with zip_file.open("antonyms.csv") as file:
-            data: pd.DataFrame = pd.read_csv(file)
-    data = shuffle(data, random_state=seed)
-    data = explode_antonyms(data)
-    data = data.reset_index(drop=True)
-    tokenizer = GPT2Tokenizer.from_pretrained(get_gpt_size(embedding_size))
-    columns = [LEMMA, ANTONYM]
-    with tqdm(
-        desc="Encoding data", total=sum(len(data[col]) for col in columns)
-    ) as bar:
-
-        def encode(s: str):
-            bar.update(1)
-            return tuple(tokenizer.encode(s))
-
-        for col in columns:
-            data[col] = data[col].apply(encode)
-    padded = pad_sequence(
-        list(map(torch.tensor, [*data[LEMMA], *data[ANTONYM]])),
-        padding_value=tokenizer.eos_token_id,
-    ).T
-    lemmas, antonyms = torch.split(padded, [len(data), len(data)])
-    is_disjoint = check_disjoint(lemmas, antonyms, tokenizer.eos_token_id)
-    lemmas = lemmas[is_disjoint]
-    antonyms = antonyms[is_disjoint]
-    data = data[pd.Series(is_disjoint.numpy())].reset_index(drop=True)
-    vocab = padded.unique(dim=0)
-    test_vocab = vocab[torch.randperm(len(vocab))][n_train:]
-    lemma_is_in_test = isin(lemmas, test_vocab).numpy()
-    antonym_is_in_test = isin(antonyms, test_vocab).numpy()
-    add_to_test_data = lemma_is_in_test & antonym_is_in_test
-    add_to_train_data = ~lemma_is_in_test & ~antonym_is_in_test
-    data[LEMMA] = lemmas
-    data[ANTONYM] = antonyms
-    train_data = data[add_to_train_data].copy()
-    test_data = data[add_to_test_data].copy()
-    return test_data, train_data
 
 
 class Trainer(main.Trainer):
@@ -168,12 +100,7 @@ class Trainer(main.Trainer):
         data_path: str,
         **kwargs,
     ):
-        test_data, train_data = get_datasets(
-            data_path=data_path,
-            seed=seed,
-            embedding_size=embedding_size,
-            n_train=n_train,
-        )
+        train_data, test_data = torch.load(data_path)
 
         inputs, targets = get_inputs_and_targets(
             test_data if test else train_data, seed
