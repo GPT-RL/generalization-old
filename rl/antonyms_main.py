@@ -33,11 +33,7 @@ class Trainer(main.Trainer):
     def make_agent(cls, envs: VecPyTorch, args: ArgsType) -> Agent:
         obs_shape = envs.observation_space.shape
         action_space = envs.action_space
-        train_data, test_data = torch.load(args.data_path)
 
-        inputs, _ = get_inputs_and_targets(
-            pd.concat([train_data, test_data]), seed=args.seed
-        )
         return Agent(
             architecture=args.architecture,
             obs_shape=obs_shape,
@@ -46,7 +42,7 @@ class Trainer(main.Trainer):
             hidden_size=args.hidden_size,
             train_ln=args.train_ln,
             train_wpe=args.train_wpe,
-            inputs=inputs,
+            data_path=args.data_path,
         )
 
     @staticmethod

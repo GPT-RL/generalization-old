@@ -1,7 +1,6 @@
 from typing import Callable, Literal, cast, get_args
 
 import numpy as np
-import pandas as pd
 import torch
 import torch.nn as nn
 from tqdm import tqdm
@@ -9,7 +8,6 @@ from transformers import GPT2Config, GPT2Model
 
 import agent
 from agent import NNBase
-from antonyms.env import ANTONYM, LEMMA, NON_ANTONYM, get_inputs_and_targets
 from distributions import FixedCategorical
 from utils import get_gpt_size
 
@@ -65,7 +63,7 @@ class GPTEmbed(nn.Module):
         randomize_parameters: bool,
         train_wpe: bool,
         train_ln: bool,
-        inputs: np.ndarray,
+        data_path: str,
     ):
         super().__init__()
         self.gpt = build_gpt(embedding_size, randomize_parameters)
@@ -74,6 +72,8 @@ class GPTEmbed(nn.Module):
             p.requires_grad_(requires_grad)
         self.frozen_gpt = not (train_ln or train_wpe)
         if self.frozen_gpt:
+            (train_inputs, _), (test_inputs, _) = torch.load(data_path)
+            inputs = np.concatenate([train_inputs, test_inputs], axis=0)
             self.register_buffer("inputs", torch.tensor(inputs))
             outputs = [
                 self._forward(batch)
@@ -92,7 +92,9 @@ class GPTEmbed(nn.Module):
             equals = self.inputs.unsqueeze(1) == x.unsqueeze(0)
             equals = cast(torch.Tensor, equals)
             matches = equals.all(-1).all(-1)
-            breakpoint()
+            inputs_indices, x_indices = matches.nonzero().T
+            _, x_indices = torch.sort(x_indices)
+            return self.outputs[inputs_indices[x_indices]]
         return self._forward(x)
 
 
