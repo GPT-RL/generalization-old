@@ -195,9 +195,9 @@ class Trainer:
         rollouts.obs[0].copy_(obs)
         rollouts.to(device)
 
-        episode_rewards = deque(maxlen=10)
-        episode_lengths = deque(maxlen=10)
-        episode_successes = deque(maxlen=10)
+        episode_rewards = []
+        episode_lengths = []
+        episode_successes = []
 
         start = time.time()
         save_count = 0
@@ -320,6 +320,10 @@ class Trainer:
                     logging.info(pformat(log))
                     if logger.run_id is not None:
                         logger.log(log)
+
+                    episode_rewards = []
+                    episode_lengths = []
+                    episode_success = []
 
     @staticmethod
     def load(agent, load_path):
