@@ -333,6 +333,10 @@ class Trainer:
     def total_num_steps(j, args):
         return j * args.num_processes * args.num_steps
 
+    @staticmethod
+    def num_evaluation_episodes():
+        return 10
+
     @classmethod
     def evaluate(
         cls, agent, envs, num_processes, device, start, total_num_steps, logger, test
@@ -348,7 +352,7 @@ class Trainer:
         )
         masks = torch.zeros(num_processes, 1, device=device)
 
-        while len(episode_rewards) < 10:
+        while len(episode_rewards) < cls.num_evaluation_episodes():
             with torch.no_grad():
                 _, action, _, recurrent_hidden_states = agent.forward(
                     obs, recurrent_hidden_states, masks

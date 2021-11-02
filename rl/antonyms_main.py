@@ -89,6 +89,10 @@ class Trainer(main.Trainer):
             assert args.recurrent
         return args.recurrent
 
+    @staticmethod
+    def num_evaluation_episodes():
+        return 100
+
     # noinspection PyMethodOverriding
     @classmethod
     def make_vec_envs(
