@@ -1,12 +1,15 @@
-from dataclasses import dataclass
-from typing import Callable, Literal, get_args
+from typing import Callable, Literal, cast, get_args
 
+import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
+from tqdm import tqdm
 from transformers import GPT2Config, GPT2Model
 
 import agent
 from agent import NNBase
+from antonyms.env import ANTONYM, LEMMA, NON_ANTONYM, get_inputs_and_targets
 from distributions import FixedCategorical
 from utils import get_gpt_size
 
@@ -62,15 +65,35 @@ class GPTEmbed(nn.Module):
         randomize_parameters: bool,
         train_wpe: bool,
         train_ln: bool,
+        inputs: np.ndarray,
     ):
         super().__init__()
         self.gpt = build_gpt(embedding_size, randomize_parameters)
         for name, p in self.gpt.named_parameters():
             requires_grad = (train_wpe and "wpe" in name) or (train_ln and "ln" in name)
             p.requires_grad_(requires_grad)
+        self.frozen_gpt = not (train_ln or train_wpe)
+        if self.frozen_gpt:
+            self.register_buffer("inputs", torch.tensor(inputs))
+            outputs = [
+                self._forward(batch)
+                for batch in tqdm(
+                    torch.split(self.inputs, 40, dim=0),
+                    desc="Generating frozen embedding...",
+                )
+            ]
+            self.register_buffer("outputs", torch.cat(outputs, dim=0))
+
+    def _forward(self, x: torch.Tensor):
+        return self.gpt.forward(x.long()).last_hidden_state[:, :, -1]
 
     def forward(self, x: torch.Tensor):
-        return self.gpt.forward(x.long()).last_hidden_state[:, :, -1]
+        if self.frozen_gpt:
+            equals = self.inputs.unsqueeze(1) == x.unsqueeze(0)
+            equals = cast(torch.Tensor, equals)
+            matches = equals.all(-1).all(-1)
+            breakpoint()
+        return self._forward(x)
 
 
 class BaselineEmbed(nn.Module):
