@@ -1,13 +1,12 @@
 import functools
 from typing import cast
 
-import pandas as pd
 import torch
 from stable_baselines3.common.monitor import Monitor
 
 import main
 from antonyms.agent import Agent, Architecture, GPTSize, PRETRAINED
-from antonyms.env import Env, get_inputs_and_targets
+from antonyms.env import Env
 from envs import VecPyTorch
 
 

@@ -19,17 +19,10 @@ BASELINE = "baseline"
 Architecture = Literal[PRETRAINED, RANDOMIZED, BASELINE]
 
 
-class Categorical(nn.Module):
-    @staticmethod
-    def forward(x):
-        return FixedCategorical(logits=x)
-
-
 class Agent(agent.Agent):
     def __init__(self, obs_shape, action_space, architecture: Architecture, **kwargs):
         assert architecture in get_args(Architecture)
         super().__init__(obs_shape, action_space, architecture=architecture, **kwargs)
-        self.dist = Categorical()
 
     def build_base(self, obs_shape, **kwargs):
         return Base(**kwargs)
@@ -131,7 +124,7 @@ class Base(NNBase):
         super().__init__(
             recurrent=False,
             recurrent_input_size=hidden_size,
-            hidden_size=hidden_size,
+            hidden_size=2 * hidden_size,
         )
         config = GPT2Config.from_pretrained(get_gpt_size(embedding_size))
         self.K = nn.Linear(hidden_size, hidden_size)
@@ -167,5 +160,5 @@ class Base(NNBase):
         lemma = self.K(lemma)
         choices = self.Q(choices)
         hidden = lemma * choices
-        weights = hidden.sum(-1)
-        return self.critic_linear(hidden.reshape(inputs.size(0), -1)), weights, rnn_hxs
+        hidden = hidden.reshape(inputs.size(0), -1)
+        return self.critic_linear(hidden), hidden, rnn_hxs

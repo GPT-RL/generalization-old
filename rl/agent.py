@@ -7,7 +7,8 @@ from utils import init
 
 
 class Flatten(nn.Module):
-    def forward(self, x):
+    @staticmethod
+    def forward(x):
         return x.view(x.size(0), -1)
 
 
