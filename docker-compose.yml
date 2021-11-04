@@ -15,7 +15,7 @@ services:
       - rank-counter
       - ${REPLICAS}
   sweep:
-    image: ethanabrooks/create-sweep@sha256:34b00a718054882b022e75980c24ec5ac9a456769ec394b4ea7c0baa87c77bfc
+    image: ethanabrooks/create-sweep@sha256:d0baaf541057f6fb24cd624162db675bd755bcc2fc97ee1eff397bd86ac858a6
     depends_on:
       - redis
     volumes:
