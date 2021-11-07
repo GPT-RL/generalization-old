@@ -532,7 +532,7 @@ def main(args: ArgsType):
 
         if args.logger_args is not None:
             charts = [
-                spec(x=x, y=y)
+                spec(x=x, y=y, scale_type="log" if LOSS in y else "linear")
                 for y in (
                     LOSS,
                     ACCURACY,
