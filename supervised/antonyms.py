@@ -181,32 +181,25 @@ def get_inputs_and_targets(data, seed):
     ]
     data[[(TOKEN, 0), (TOKEN, 1)]] = data[token_columns].to_numpy()[ii, jj]
     data[[(STRING, 0), (STRING, 1)]] = data[string_columns].to_numpy()[ii, jj]
+    data[TARGET] = jj[:, 0]
+    return data
 
-    targets = torch.tensor(jj[:, 0])
-    return data, targets
 
-
-class Antonyms(Dataset):
-    def __init__(
-        self,
-        data: pd.DataFrame,
-        seed: int,
-    ):
-        inputs, targets = get_inputs_and_targets(data, seed)
-        self.inputs = inputs
-        self.targets = targets
+class _Dataset(Dataset):
+    def __init__(self, data: pd.DataFrame):
+        self.data = data
 
     def __len__(self):
-        return len(self.inputs)
+        return len(self.data)
 
     def __getitem__(self, idx):
-        row = self.inputs.iloc[idx]
+        row = self.data.iloc[idx]
         tokens = torch.stack(
             [torch.tensor(list(row[TOKEN, col])) for col in [LEMMA, 0, 1]],
             dim=0,
         )
         words = row[[(STRING, col) for col in [LEMMA, 0, 1]]].tolist()
-        return tokens, words, self.targets[idx]
+        return tokens, words, int(row[TARGET])
 
 
 RUN_OR_SWEEP = Literal["run", "sweep"]
@@ -365,16 +358,17 @@ def train(args: Args, logger: HasuraLogger):
     for col in [TRAIN, TEST]:
         data[col] = data[col].astype("category")
 
+    train_data = get_inputs_and_targets(data[data[TRAIN]], args.seed)
+    test_data = get_inputs_and_targets(data[data[TEST]], args.seed)
+    data = pd.concat([train_data, test_data])
+
     if args.pickle_data:
         save_path = get_save_path(logger.run_id, name="antonyms.pkl")
         save_path.parent.mkdir(parents=True, exist_ok=True)
         data.to_pickle(str(save_path))
 
-    train_data = data[is_train].copy()
-    test_data = data[is_test].copy()
-
-    train_dataset = Antonyms(train_data, seed=args.seed)
-    test_dataset = Antonyms(test_data, seed=args.seed)
+    train_dataset = _Dataset(train_data)
+    test_dataset = _Dataset(test_data)
     train_loader = torch.utils.data.DataLoader(train_dataset, **train_kwargs)
     test_loader = torch.utils.data.DataLoader(test_dataset, **test_kwargs)
 
