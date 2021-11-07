@@ -136,6 +136,10 @@ NON_ANTONYM = "non-antonyms"
 ANTONYM = "antonyms"
 LEMMA = "lemma"
 TARGET = "target"
+STRING = "string"
+TOKEN = "token"
+TRAIN = "train"
+TEST = "test"
 
 
 def explode_antonyms(data: pd.DataFrame):
@@ -171,7 +175,7 @@ def get_inputs_and_targets(data, seed):
     ]  # shuffle data using indices
     data[input_columns] = permuted_inputs
     inputs = torch.stack(
-        [torch.stack(list(data[col])) for col in [LEMMA, *input_columns]], dim=1
+        [torch.tensor(list(data[col])) for col in [LEMMA, *input_columns]], dim=1
     )
     targets = torch.tensor(jj[:, 0])
     return inputs, targets
@@ -234,6 +238,7 @@ class Args(Tap):
     n_train: int = 9000
     n_test: int = 320
     no_cuda: bool = False
+    pickle_data: bool = False
     save_model: bool = False
     seed: int = 1
     test_batch_size: int = 1000
@@ -250,11 +255,11 @@ class ArgsType(Args):
     logger_args: Optional[RUN_OR_SWEEP]
 
 
-def get_save_path(run_id: Optional[int]):
+def get_save_path(run_id: Optional[int], name: str = "checkpoint.pkl"):
     return (
-        Path("/tmp/logs/checkpoint.pkl")
+        Path("/tmp/logs/", name)
         if run_id is None
-        else Path("/tmp/logs", str(run_id), "checkpoint.pkl")
+        else Path("/tmp/logs", str(run_id), name)
     )
 
 
@@ -303,23 +308,27 @@ def train(args: Args, logger: HasuraLogger):
     data = shuffle(data, random_state=args.seed)
     data = explode_antonyms(data)
     data = data.reset_index(drop=True)
+    data = pd.DataFrame(
+        {
+            (STRING, LEMMA): data[LEMMA],
+            (STRING, ANTONYM): data[ANTONYM],
+        }
+    )
 
     tokenizer = GPT2Tokenizer.from_pretrained(get_gpt_size(args.embedding_size))
     columns = [LEMMA, ANTONYM]
 
-    with tqdm(
-        desc="Encoding data", total=sum(len(data[col]) for col in columns)
-    ) as bar:
+    with tqdm(desc="Encoding data", total=2 * len(data)) as bar:
 
         def encode(s: str):
             bar.update(1)
             return tuple(tokenizer.encode(s))
 
         for col in columns:
-            data[col] = data[col].apply(encode)
+            data[TOKEN, col] = data[STRING, col].apply(encode)
 
     padded = pad_sequence(
-        list(map(torch.tensor, [*data[LEMMA], *data[ANTONYM]])),
+        list(map(torch.tensor, [*data[TOKEN, LEMMA], *data[TOKEN, ANTONYM]])),
         padding_value=tokenizer.eos_token_id,
     ).T
     lemmas, antonyms = torch.split(padded, [len(data), len(data)])
@@ -335,14 +344,23 @@ def train(args: Args, logger: HasuraLogger):
     lemma_is_in_test = isin(lemmas, test_vocab).numpy()
     antonym_is_in_test = isin(antonyms, test_vocab).numpy()
 
-    add_to_test_data = lemma_is_in_test & antonym_is_in_test
-    add_to_train_data = ~lemma_is_in_test & ~antonym_is_in_test
+    is_test = lemma_is_in_test & antonym_is_in_test
+    is_train = ~lemma_is_in_test & ~antonym_is_in_test
 
-    data[LEMMA] = lemmas
-    data[ANTONYM] = antonyms
+    data[TOKEN, LEMMA] = lemmas.tolist()
+    data[TOKEN, ANTONYM] = antonyms.tolist()
+    data[TRAIN] = is_train
+    data[TEST] = is_test
+    for col in [TRAIN, TEST]:
+        data[col] = data[col].astype("category")
 
-    train_data = data[add_to_train_data].copy()
-    test_data = data[add_to_test_data].copy()
+    if args.pickle_data:
+        save_path = get_save_path(logger.run_id, name="antonyms.pkl")
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        data.to_pickle(str(save_path))
+
+    train_data = data[TOKEN][is_train].copy()
+    test_data = data[TOKEN][is_test].copy()
 
     train_dataset = Antonyms(train_data, seed=args.seed)
     test_dataset = Antonyms(test_data, seed=args.seed)
