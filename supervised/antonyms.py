@@ -161,24 +161,29 @@ def check_disjoint(lemmas: torch.Tensor, antonyms: torch.Tensor, eos: int):
 
 
 def get_inputs_and_targets(data, seed):
-    antonym = data[ANTONYM].copy().reset_index(drop=True)
+    idx = pd.IndexSlice
+    antonym = data.loc[:, idx[:, ANTONYM]].copy().reset_index(drop=True)
     data = shuffle(data, random_state=seed)  # shuffle data
-    data[NON_ANTONYM] = antonym
+    for col in [STRING, TOKEN]:
+        data[col, NON_ANTONYM] = antonym[col]
     # permute choices (otherwise correct answer is always 0)
-    input_columns = [ANTONYM, NON_ANTONYM]
     jj, ii = np.meshgrid(np.arange(2), np.arange(len(data)))
     jj = np.random.default_rng(seed).permuted(
         jj, axis=1
     )  # shuffle indices along y-axis
-    permuted_inputs = data[input_columns].to_numpy()[
-        ii, jj
-    ]  # shuffle data using indices
-    data[input_columns] = permuted_inputs
-    inputs = torch.stack(
-        [torch.tensor(list(data[col])) for col in [LEMMA, *input_columns]], dim=1
-    )
+    token_columns = [
+        (TOKEN, ANTONYM),
+        (TOKEN, NON_ANTONYM),
+    ]
+    string_columns = [
+        (STRING, ANTONYM),
+        (STRING, NON_ANTONYM),
+    ]
+    data[[(TOKEN, 0), (TOKEN, 1)]] = data[token_columns].to_numpy()[ii, jj]
+    data[[(STRING, 0), (STRING, 1)]] = data[string_columns].to_numpy()[ii, jj]
+
     targets = torch.tensor(jj[:, 0])
-    return inputs, targets
+    return data, targets
 
 
 class Antonyms(Dataset):
@@ -195,7 +200,13 @@ class Antonyms(Dataset):
         return len(self.inputs)
 
     def __getitem__(self, idx):
-        return self.inputs[idx], self.targets[idx]
+        row = self.inputs.iloc[idx]
+        tokens = torch.stack(
+            [torch.tensor(list(row[TOKEN, col])) for col in [LEMMA, 0, 1]],
+            dim=0,
+        )
+        words = row[[(STRING, col) for col in [LEMMA, 0, 1]]].tolist()
+        return tokens, words, self.targets[idx]
 
 
 RUN_OR_SWEEP = Literal["run", "sweep"]
@@ -359,8 +370,8 @@ def train(args: Args, logger: HasuraLogger):
         save_path.parent.mkdir(parents=True, exist_ok=True)
         data.to_pickle(str(save_path))
 
-    train_data = data[TOKEN][is_train].copy()
-    test_data = data[TOKEN][is_test].copy()
+    train_data = data[is_train].copy()
+    test_data = data[is_test].copy()
 
     train_dataset = Antonyms(train_data, seed=args.seed)
     test_dataset = Antonyms(test_data, seed=args.seed)
@@ -389,8 +400,8 @@ def train(args: Args, logger: HasuraLogger):
     for epoch in range(1, args.epochs + 1):
 
         model.train()
-        correct = []
-        for batch_idx, (data, target) in enumerate(train_loader):
+        correct_total = []
+        for batch_idx, (data, words, target) in enumerate(train_loader):
             data, target = data.to(device), target.to(device)
             optimizer.zero_grad()
             output = model(data)
@@ -398,11 +409,11 @@ def train(args: Args, logger: HasuraLogger):
             pred = output.argmax(
                 dim=1, keepdim=True
             )  # get the index of the max log-probability
-            correct += [pred.eq(target.view_as(pred)).squeeze(-1).float()]
+            correct_total += [pred.eq(target.view_as(pred)).squeeze(-1).float()]
             loss.backward()
             optimizer.step()
             if batch_idx % args.log_interval == 0:
-                accuracy = torch.cat(correct).mean()
+                accuracy = torch.cat(correct_total).mean()
                 log = {
                     EPOCH: epoch,
                     LOSS: loss.item(),
@@ -418,9 +429,9 @@ def train(args: Args, logger: HasuraLogger):
 
         model.eval()
         test_loss = 0
-        correct = []
+        correct_total = []
         with torch.no_grad():
-            for data, target in test_loader:
+            for data, words, target in test_loader:
                 data, target = data.to(device), target.to(device)
                 output = model(data)
                 test_loss += F.nll_loss(
@@ -429,10 +440,36 @@ def train(args: Args, logger: HasuraLogger):
                 pred = output.argmax(
                     dim=1, keepdim=True
                 )  # get the index of the max log-probability
-                correct += [pred.eq(target.view_as(pred)).squeeze(-1).float()]
+                correct = pred.eq(target.view_as(pred)).squeeze(-1)
+                correct_total += [correct.float()]
+                zipped = list(zip(correct, output, pred, target, *words))
+                for (correct, out, pred, tgt, lemma, choice1, choice2) in zipped:
+                    choices = [choice1, choice2]
+                    print(
+                        "Pred:",
+                        int(pred),
+                        "- Targ:",
+                        int(tgt),
+                        "- Lemma:",
+                        lemma,
+                        "- Choice1:",
+                        choice1,
+                        "- Choice2:",
+                        choice2,
+                        # "Lemma:",
+                        # lemma,
+                        # "- Chosen:",
+                        # choices[pred],
+                        # "- Confidence:",
+                        # out[pred],
+                        # "- Answer:",
+                        # choices[tgt],
+                        # "- Alternative:",
+                        # choices[1 - tgt],
+                    )
 
         test_loss /= len(test_loader.dataset)
-        test_accuracy = torch.cat(correct).mean()
+        test_accuracy = torch.cat(correct_total).mean()
 
         log = {
             EPOCH: epoch,
