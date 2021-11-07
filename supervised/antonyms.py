@@ -17,6 +17,7 @@ import torch.optim as optim
 import yaml
 from gql import gql
 from run_logger import HasuraLogger
+from tabulate import tabulate
 from tap import Tap
 from torch.nn.utils.rnn import pad_sequence
 from torch.optim.lr_scheduler import StepLR
@@ -423,6 +424,7 @@ def train(args: Args, logger: HasuraLogger):
 
         model.eval()
         test_loss = 0
+        df = pd.DataFrame()
         correct_total = []
         with torch.no_grad():
             for data, words, target in test_loader:
@@ -436,31 +438,26 @@ def train(args: Args, logger: HasuraLogger):
                 )  # get the index of the max log-probability
                 correct = pred.eq(target.view_as(pred)).squeeze(-1)
                 correct_total += [correct.float()]
-                zipped = list(zip(correct, output, pred, target, *words))
-                for (correct, out, pred, tgt, lemma, choice1, choice2) in zipped:
-                    choices = [choice1, choice2]
-                    print(
-                        "Pred:",
-                        int(pred),
-                        "- Targ:",
-                        int(tgt),
-                        "- Lemma:",
-                        lemma,
-                        "- Choice1:",
-                        choice1,
-                        "- Choice2:",
-                        choice2,
-                        # "Lemma:",
-                        # lemma,
-                        # "- Chosen:",
-                        # choices[pred],
-                        # "- Confidence:",
-                        # out[pred],
-                        # "- Answer:",
-                        # choices[tgt],
-                        # "- Alternative:",
-                        # choices[1 - tgt],
+                lemma, choice1, choice2 = words
+                choices = list(zip(choice1, choice2))
+                pred = pred.flatten()
+                probs = output.exp()
+                prob_of_choice = probs[torch.arange(len(pred)), pred.flatten()]
+                new_df = pd.DataFrame(
+                    dict(
+                        correct=correct.cpu(),
+                        lemma=lemma,
+                        chosen=[choice[p] for choice, p in zip(choices, pred)],
+                        prob=prob_of_choice.cpu(),
+                        answer=[choice[t] for choice, t in zip(choices, target)],
+                        alternative=[
+                            choice[1 - t] for choice, t in zip(choices, target)
+                        ],
                     )
+                )
+                df = df.append(new_df)
+        df = df.sort_values("correct")
+        print(tabulate(df, headers="keys", tablefmt="psql"))
 
         test_loss /= len(test_loader.dataset)
         test_accuracy = torch.cat(correct_total).mean()
