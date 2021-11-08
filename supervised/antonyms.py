@@ -394,7 +394,6 @@ def train(args: Args, logger: HasuraLogger):
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
     for epoch in range(1, args.epochs + 1):
 
-        model.train()
         correct_total = []
         for batch_idx, (data, words, target) in enumerate(train_loader):
             data, target = data.to(device), target.to(device)
@@ -422,7 +421,6 @@ def train(args: Args, logger: HasuraLogger):
                 if args.dry_run:
                     break
 
-        model.eval()
         test_loss = 0
         df = pd.DataFrame()
         correct_total = []
