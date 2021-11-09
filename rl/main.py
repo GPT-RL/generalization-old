@@ -160,7 +160,7 @@ class Trainer:
             torch.backends.cudnn.deterministic = True
 
         torch.set_num_threads(1)
-        device = torch.device("cuda:0" if args.cuda else "cpu")
+        device = cls.get_device(args.cuda)
 
         envs = cls.make_vec_envs(device=device, test=False, **args.as_dict())
 
@@ -324,6 +324,10 @@ class Trainer:
                     episode_rewards = []
                     episode_lengths = []
                     episode_success = []
+
+    @classmethod
+    def get_device(cls, cuda: bool):
+        return torch.device("cuda:0" if cuda else "cpu")
 
     @staticmethod
     def load(agent, load_path):

@@ -1,12 +1,13 @@
 import functools
 from typing import cast
 
+import pandas as pd
 import torch
 from stable_baselines3.common.monitor import Monitor
 
 import main
 from antonyms.agent import Agent, Architecture, GPTSize, PRETRAINED
-from antonyms.env import Env
+from antonyms.env import Env, parse_data
 from envs import VecPyTorch
 
 
@@ -44,6 +45,7 @@ class Trainer(main.Trainer):
             train_wpe=args.train_wpe,
             data_path=args.data_path,
             n_layers=args.n_layers,
+            device=cls.get_device(args.cuda),
         )
 
     @staticmethod
@@ -67,8 +69,12 @@ class Trainer(main.Trainer):
         data_path: str,
         **kwargs,
     ):
-        train_data, test_data = torch.load(data_path)
-        inputs, targets = test_data if test else train_data
+
+        data = pd.read_pickle(data_path)
+        data = data[data.test] if test else data[data.train]
+        choice0, choice1, lemmas = parse_data(data)
+        inputs = torch.stack([lemmas, choice0, choice1], dim=1)
+        targets = torch.tensor(list(data.target))
 
         return super().make_vec_envs(
             seed=seed, inputs=inputs, targets=targets, test=test, **kwargs
@@ -77,9 +83,9 @@ class Trainer(main.Trainer):
     @classmethod
     def make_env(cls, *args, **kwargs):
         def _thunk(
-            inputs: torch.Tensor,
+            inputs: torch.tensor,
+            targets: torch.tensor,
             seed: int,
-            targets: torch.Tensor,
             allow_early_resets: bool,
             **_,
         ):
