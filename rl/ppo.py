@@ -73,8 +73,7 @@ class PPO:
                     obs_batch, recurrent_hidden_states_batch, masks_batch, actions_batch
                 )
 
-                ratio = torch.exp(action_log_probs)
-                surr1 = ratio * adv_targ
+                surr1 = action_log_probs * adv_targ
                 action_loss = -surr1.mean()
 
                 if self.use_clipped_value_loss:
