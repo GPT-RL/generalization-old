@@ -79,7 +79,7 @@ class PPO:
                     torch.clamp(ratio, 1.0 - self.clip_param, 1.0 + self.clip_param)
                     * adv_targ
                 )
-                action_loss = -torch.min(surr1, surr2).mean()
+                action_loss = -surr1.mean()
 
                 if self.use_clipped_value_loss:
                     value_pred_clipped = value_preds_batch + (
