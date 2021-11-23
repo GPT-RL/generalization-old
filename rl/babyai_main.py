@@ -343,7 +343,7 @@ class Trainer(main.Trainer):
             elif env_id == "linear":
 
                 def is_test(y: int):
-                    return str(test_number) in str(y)
+                    return test_number is not None and str(test_number) in str(y)
 
                 def is_train(y: int):
                     return not is_test(y)
