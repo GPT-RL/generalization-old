@@ -3,6 +3,7 @@ import itertools
 from typing import Generator, List, Literal, Union, cast
 
 import gym
+from babyai.levels.verifier import ObjDesc, PickupInstr
 from gym.wrappers import TimeLimit
 import torch
 from stable_baselines3.common.monitor import Monitor
@@ -175,15 +176,20 @@ class Trainer(main.Trainer):
                     PlantAnimalWrapper.purple_animal,
                     PlantAnimalWrapper.black_plant,
                 }
-                train_objects = sorted(test_objects if test else objects - test_objects)
-                train_objects = [o.split() for o in train_objects]
-                train_objects = [(t, c) for (c, t) in train_objects]
-                objects = test_objects if test else train_objects
+                objects = sorted(test_objects if test else objects - test_objects)
+                objects = [o.split() for o in objects]
+                objects = [(t, c) for (c, t) in objects]
                 _env = PickupEnv(
                     *args, room_objects=objects, goal_objects=objects, **_kwargs
                 )
                 _env = PlantAnimalWrapper(_env)
-                longest_mission = "pick up the grasshopper"
+
+                def missions():
+                    for _, vs in _env.replacements.items():
+                        for v in vs:
+                            yield f"pick up the {v}"
+
+                missions = list(missions())
             elif env_id == "directions":
                 test_directions = {CardinalDirection.north}
                 directions = (
