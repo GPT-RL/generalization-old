@@ -828,7 +828,7 @@ run-logger = {git = "https://github.com/ethanabrooks/run-logger.git", rev = "mai
 type = "git"
 url = "https://github.com/ethanabrooks/sweep-logger.git"
 reference = "main"
-resolved_reference = "40f20171e3fd57ed3c8cef975c7f53d311d37091"
+resolved_reference = "78fa9f760ee4523ff77a73fc592e3ea9b7580201"
 
 [[package]]
 name = "threadpoolctl"
